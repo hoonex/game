@@ -9,55 +9,53 @@ def get_rooms():
 rooms = get_rooms()
 BOARD_SIZE = 15
 
-# --- 🌟 2. 진짜 바둑판(교차점) CSS 스타일링 🌟 ---
+# --- 🌟 2. 완벽하게 수정된 바둑판 CSS 🌟 ---
 st.markdown("""
     <style>
-    /* 1. 바둑판 전체 테두리와 배경 (나무 질감) */
+    /* 1. 바둑판 전체 테두리 (가로줄 15개가 아니라, 전체를 감싸는 판자 1개로 변경) */
     div[data-testid="stHorizontalBlock"] {
-        gap: 0rem !important; /* 가로 칸 사이의 여백 완전 제거! */
-        background-color: #DCB35C; 
-        padding: 15px; /* 바둑판 바깥쪽 여백 */
-        border: 5px solid #4A330A; /* 두꺼운 나무 테두리 */
-        box-shadow: 5px 5px 15px rgba(0,0,0,0.5); 
+        gap: 0rem !important; 
+        background-color: #DCB35C !important; 
+        padding: 10px !important; 
+        border: 4px solid #4A330A !important; 
+        box-shadow: 5px 5px 15px rgba(0,0,0,0.5) !important; 
         max-width: 600px;
         margin: auto;
     }
     
-    /* 2. 세로 줄 사이의 여백 제거 */
+    /* 2. 세로줄 내부의 여백 제거 (버튼들이 위아래로 딱 붙게 됨) */
     div[data-testid="column"] { 
+        gap: 0rem !important;
         padding: 0 !important; 
         min-width: 0 !important;
-        gap: 0 !important;
     }
 
-    /* 3. 버튼을 '선과 선이 만나는 교차점'으로 둔갑시키는 마법 */
-    button {
+    /* 3. 십자선 교차점 버튼 (오직 바둑판 내부의 버튼에만 적용!) */
+    div[data-testid="column"] button {
         background-color: transparent !important;
-        border: none !important; /* 기본 테두리 없앰 */
+        border: none !important; 
         border-radius: 0px !important;
-        aspect-ratio: 1 / 1 !important; /* 완벽한 정사각형 유지 */
+        aspect-ratio: 1 / 1 !important; 
         height: auto !important;
         width: 100% !important;
         padding: 0 !important;
         margin: 0 !important;
-        font-size: 28px !important; /* 바둑돌 크기 */
+        font-size: 26px !important; 
         display: flex;
         align-items: center;
         justify-content: center;
         
-        /* 배경에 검은색 십자가(+) 선을 그립니다. 이게 바둑판의 선이 됩니다! */
+        /* 십자선 두께를 2%로 얇고 정교하게 조정 */
         background-image: 
-            linear-gradient(to right, transparent 48%, #111 48%, #111 52%, transparent 52%),
-            linear-gradient(to bottom, transparent 48%, #111 48%, #111 52%, transparent 52%) !important;
+            linear-gradient(to right, transparent 49%, #222 49%, #222 51%, transparent 51%),
+            linear-gradient(to bottom, transparent 49%, #222 49%, #222 51%, transparent 51%) !important;
     }
 
-    /* 마우스 올렸을 때 교차점 중앙만 살짝 반응하게 */
-    button:hover {
+    div[data-testid="column"] button:hover {
         background-color: rgba(0, 0, 0, 0.15) !important; 
     }
 
-    /* 돌이 놓였을 때 이모지가 선(배경)을 덮으면서 그럴싸하게 보임 */
-    button:disabled {
+    div[data-testid="column"] button:disabled {
         color: black !important;
         opacity: 1 !important;
         cursor: default !important;
@@ -82,7 +80,7 @@ def check_win(board, player):
                 if r <= BOARD_SIZE - 5 and c >= 4 and all(board[r+i, c-i] == player for i in range(5)): return True
     return False
 
-# --- 5. 대기실 (방 생성 및 입장) ---
+# --- 5. 대기실 ---
 if st.session_state.room_code is None:
     st.title("⚫⚪ 진짜 바둑판 오목")
     room_input = st.text_input("방 코드를 입력하세요 (예: 1234)")
@@ -108,7 +106,7 @@ if st.session_state.room_code is None:
             else:
                 st.error("이미 두 명이 꽉 찬 방입니다!")
 
-# --- 6. 게임 화면 (0.5초 자동 동기화) ---
+# --- 6. 게임 화면 (0.5초 자동 갱신) ---
 else:
     code = st.session_state.room_code
     game = rooms[code]
@@ -117,7 +115,6 @@ else:
     role_text = "흑돌(⚫)" if my_role == 1 else "백돌(⚪)"
     st.markdown(f"### 🚪 방 제목: [{code}] | 👤 내 역할: **{role_text}**")
     
-    # 상대방 기다리기
     if game["players"] < 2:
         @st.fragment(run_every=0.5)
         def wait_for_opponent():
@@ -127,7 +124,6 @@ else:
                 st.rerun() 
         wait_for_opponent()
 
-    # 본격적인 게임 보드
     else:
         def place_stone(r, c):
             if game["board"][r, c] == 0 and not game["game_over"] and game["turn"] == my_role:
@@ -152,18 +148,18 @@ else:
                 else:
                     st.info(f"내 턴입니다! 교차점 중앙을 눌러 돌을 두세요.")
 
-            st.write("") # 약간의 여백
+            st.write("") 
             
-            # 오목판 그리기
-            for r in range(BOARD_SIZE):
-                cols = st.columns(BOARD_SIZE)
-                for c in range(BOARD_SIZE):
-                    val = game["board"][r, c]
-                    symbol = "⚫" if val == 1 else "⚪" if val == 2 else "ㅤ"
-                    
-                    is_disabled = (game["turn"] != my_role) or game["game_over"] or (val != 0)
-                    
-                    with cols[c]:
+            # 🌟 핵심 변경: 세로줄(Column)을 먼저 만들고, 그 안에 행(Row)을 아래로 쌓습니다!
+            cols = st.columns(BOARD_SIZE)
+            for c in range(BOARD_SIZE):
+                with cols[c]:
+                    for r in range(BOARD_SIZE):
+                        val = game["board"][r, c]
+                        symbol = "⚫" if val == 1 else "⚪" if val == 2 else "ㅤ"
+                        
+                        is_disabled = (game["turn"] != my_role) or game["game_over"] or (val != 0)
+                        
                         st.button(
                             symbol, 
                             key=f"btn_{r}_{c}", 
