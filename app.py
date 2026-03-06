@@ -9,51 +9,54 @@ def get_rooms():
 rooms = get_rooms()
 BOARD_SIZE = 15
 
-# --- 🌟 2. 고퀄리티 바둑판 CSS 스타일링 🌟 ---
-# 완벽한 정사각형, 나무색 배경, 격자무늬 선, 그림자 효과 적용
+# --- 🌟 2. 진짜 바둑판(교차점) CSS 스타일링 🌟 ---
 st.markdown("""
     <style>
-    /* 전체 바둑판 레이아웃 여백 제거 */
-    [data-testid="column"] { 
-        padding: 0 !important; 
-        min-width: 0 !important;
+    /* 1. 바둑판 전체 테두리와 배경 (나무 질감) */
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0rem !important; /* 가로 칸 사이의 여백 완전 제거! */
+        background-color: #DCB35C; 
+        padding: 15px; /* 바둑판 바깥쪽 여백 */
+        border: 5px solid #4A330A; /* 두꺼운 나무 테두리 */
+        box-shadow: 5px 5px 15px rgba(0,0,0,0.5); 
+        max-width: 600px;
+        margin: auto;
     }
     
-    /* 바둑판 테두리 및 배경 (나무 질감 느낌의 색상) */
-    [data-testid="stHorizontalBlock"] {
+    /* 2. 세로 줄 사이의 여백 제거 */
+    div[data-testid="column"] { 
+        padding: 0 !important; 
+        min-width: 0 !important;
         gap: 0 !important;
-        background-color: #DCB35C; /* 실제 바둑판 나무색 */
-        padding: 8px; /* 바둑판 바깥쪽 여백 */
-        border: 4px solid #5C4009; /* 두꺼운 나무 테두리 */
-        border-radius: 4px;
-        box-shadow: 5px 5px 15px rgba(0,0,0,0.5); /* 그림자 효과로 입체감 부여 */
-        max-width: 600px;
-        margin: 0 auto;
     }
 
-    /* 칸(버튼) 스타일: 길쭉해지는 것 방지하고 완벽한 정사각형으로 */
+    /* 3. 버튼을 '선과 선이 만나는 교차점'으로 둔갑시키는 마법 */
     button {
-        background-color: transparent !important; /* 배경은 바둑판 색을 비치게 함 */
-        border: 1px solid #8B6B33 !important; /* 얇은 바둑판 격자 선 */
-        border-radius: 0px !important; /* 둥근 모서리 없애기 */
-        aspect-ratio: 1 / 1 !important; /* 🌟 핵심: 무조건 가로세로 1:1 비율 유지 */
+        background-color: transparent !important;
+        border: none !important; /* 기본 테두리 없앰 */
+        border-radius: 0px !important;
+        aspect-ratio: 1 / 1 !important; /* 완벽한 정사각형 유지 */
         height: auto !important;
         width: 100% !important;
         padding: 0 !important;
         margin: 0 !important;
-        font-size: 26px !important; /* 바둑돌 이모지 크기 */
-        line-height: 1 !important;
+        font-size: 28px !important; /* 바둑돌 크기 */
         display: flex;
         align-items: center;
         justify-content: center;
+        
+        /* 배경에 검은색 십자가(+) 선을 그립니다. 이게 바둑판의 선이 됩니다! */
+        background-image: 
+            linear-gradient(to right, transparent 48%, #111 48%, #111 52%, transparent 52%),
+            linear-gradient(to bottom, transparent 48%, #111 48%, #111 52%, transparent 52%) !important;
     }
 
-    /* 마우스 올렸을 때 칸 색상 살짝 진해짐 */
+    /* 마우스 올렸을 때 교차점 중앙만 살짝 반응하게 */
     button:hover {
-        background-color: rgba(0, 0, 0, 0.1) !important; 
+        background-color: rgba(0, 0, 0, 0.15) !important; 
     }
 
-    /* 돌이 놓여서 비활성화된 버튼의 이모지 색상 흐려짐 방지 */
+    /* 돌이 놓였을 때 이모지가 선(배경)을 덮으면서 그럴싸하게 보임 */
     button:disabled {
         color: black !important;
         opacity: 1 !important;
@@ -79,7 +82,7 @@ def check_win(board, player):
                 if r <= BOARD_SIZE - 5 and c >= 4 and all(board[r+i, c-i] == player for i in range(5)): return True
     return False
 
-# --- 5. 대기실 ---
+# --- 5. 대기실 (방 생성 및 입장) ---
 if st.session_state.room_code is None:
     st.title("⚫⚪ 진짜 바둑판 오목")
     room_input = st.text_input("방 코드를 입력하세요 (예: 1234)")
@@ -147,11 +150,11 @@ else:
                 if game["turn"] != my_role:
                     st.warning(f"상대방({current_turn})의 턴입니다. 기다려주세요...")
                 else:
-                    st.info(f"내 턴입니다! 원하는 곳에 돌을 두세요.")
+                    st.info(f"내 턴입니다! 교차점 중앙을 눌러 돌을 두세요.")
 
             st.write("") # 약간의 여백
             
-            # 오목판 그리기 (CSS가 적용된 부분)
+            # 오목판 그리기
             for r in range(BOARD_SIZE):
                 cols = st.columns(BOARD_SIZE)
                 for c in range(BOARD_SIZE):
