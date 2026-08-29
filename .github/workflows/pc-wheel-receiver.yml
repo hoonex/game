@@ -1,0 +1,42 @@
+name: PC Wheel Receiver
+
+on:
+  push:
+    branches:
+      - feat/pc-wheel-receiver
+    paths:
+      - "pc-wheel-receiver/**"
+      - ".github/workflows/pc-wheel-receiver.yml"
+  pull_request:
+    paths:
+      - "pc-wheel-receiver/**"
+      - ".github/workflows/pc-wheel-receiver.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: pc-wheel-receiver
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Publish win-x64
+        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o publish/win-x64
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCWheelReceiver-win-x64
+          path: pc-wheel-receiver/publish/win-x64/
