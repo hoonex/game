@@ -12,6 +12,9 @@ on:
       - "pc-wheel-receiver/**"
       - ".github/workflows/pc-wheel-receiver.yml"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -35,8 +38,27 @@ jobs:
       - name: Publish win-x64
         run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o publish/win-x64
 
-      - name: Upload Windows build
+      - name: Create release ZIP
+        shell: pwsh
+        run: Compress-Archive -Path publish/win-x64/* -DestinationPath publish/PCWheelReceiver-win-x64.zip -Force
+
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
           name: PCWheelReceiver-win-x64
           path: pc-wheel-receiver/publish/win-x64/
+
+      - name: Publish direct-download GitHub Release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "pc-wheel-v0.1.0"
+          $zip = "publish/PCWheelReceiver-win-x64.zip"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $tag $zip --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "PC Wheel Receiver v0.1.0" --notes "Windows x64 receiver for the Android PC Wheel app. Protocol: 36-byte little-endian UDP state packet with 12-byte header echo for RTT."
+          }
