@@ -76,10 +76,9 @@ public sealed class UdpReceiverService : IDisposable
                     break;
                 }
 
+                // Backward-compatible support for a standalone 12-byte ping datagram.
                 if (result.Buffer.Length == _config.PingPacketSize && _config.EchoPingPackets)
                 {
-                    // The Android client measures RTT. Echo the exact 12-byte payload so its
-                    // request identifier/timestamp survives regardless of the internal format.
                     await _udp.SendAsync(result.Buffer, result.Buffer.Length, result.RemoteEndPoint);
                     continue;
                 }
@@ -93,6 +92,18 @@ public sealed class UdpReceiverService : IDisposable
                         PublishLocked();
                     }
                     continue;
+                }
+
+                // Android PC Wheel latency protocol: every valid-size 36-byte controller datagram
+                // is acknowledged by echoing its first 12 bytes (sequence + timestamp) verbatim.
+                // Echo before parsing/output so RTT measurement is not inflated by controller work.
+                if (_config.EchoPingPackets && _config.PingPacketSize > 0 &&
+                    _config.PingPacketSize <= result.Buffer.Length)
+                {
+                    await _udp.SendAsync(
+                        result.Buffer.AsMemory(0, _config.PingPacketSize),
+                        result.RemoteEndPoint,
+                        cancellationToken);
                 }
 
                 if (!_parser.TryParse(result.Buffer, out var state, out var parseError))
@@ -151,6 +162,9 @@ public sealed class UdpReceiverService : IDisposable
     {
         if (_lastSequence is uint previous)
         {
+            // The Android sequence is a signed Int, but the on-wire representation is exactly
+            // 32 bits. Treating it as uint here preserves modulo-2^32 progression across the
+            // Int.MAX_VALUE -> Int.MIN_VALUE wrap without a special case.
             var delta = unchecked(sequence - previous);
             if (delta > 1 && delta < 1_000_000)
             {
