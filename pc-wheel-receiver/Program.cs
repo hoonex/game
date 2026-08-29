@@ -16,9 +16,24 @@ internal static class Program
         {
             var configPath = Path.Combine(AppContext.BaseDirectory, "protocol.json");
             var config = ProtocolConfig.Load(configPath);
-            using var output = new Xbox360Output(config.Output);
-            using var receiver = new UdpReceiverService(config, output);
-            Application.Run(new MainForm(config, receiver, output));
+
+            IControllerOutput output;
+            try
+            {
+                output = new Xbox360Output(config.Output);
+            }
+            catch (Exception ex)
+            {
+                output = new DiagnosticOutput(
+                    "Virtual Xbox output unavailable. Install ViGEmBus, then restart. " +
+                    $"Driver/API error: {ex.Message}");
+            }
+
+            using (output)
+            using (var receiver = new UdpReceiverService(config, output))
+            {
+                Application.Run(new MainForm(configPath, config, receiver, output));
+            }
         }
         catch (Exception ex)
         {
