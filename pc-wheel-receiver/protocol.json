@@ -3,8 +3,8 @@
   "controllerPacketSize": 36,
   "pingPacketSize": 12,
   "echoPingPackets": true,
-  "endianness": "auto",
-  "autoPreferredEndianness": "big",
+  "endianness": "little",
+  "autoPreferredEndianness": "little",
   "fields": {
     "sequence": { "offset": 0, "type": "uint32" },
     "timestamp": { "offset": 4, "type": "int64" },
