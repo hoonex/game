@@ -73,7 +73,7 @@ public sealed class Xbox360Output : IControllerOutput
         }
         finally
         {
-            _controller.Dispose();
+            (_controller as IDisposable)?.Dispose();
             _client.Dispose();
             IsConnected = false;
             Status = "Disconnected";
