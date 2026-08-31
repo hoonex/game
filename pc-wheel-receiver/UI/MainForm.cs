@@ -22,7 +22,7 @@ public sealed class MainForm : Form
     private readonly Label _packetRate = NewValueLabel("0 Hz");
     private readonly Label _packetLoss = NewValueLabel("0.00 %");
     private readonly Label _packetAge = NewValueLabel("-");
-    private readonly Label _endianness = NewValueLabel("auto");
+    private readonly Label _endianness = NewValueLabel("little");
     private readonly Label _outputStatus = NewValueLabel("-");
     private readonly Label _steeringText = NewValueLabel("0.0 %");
     private readonly Label _throttleText = NewValueLabel("0.0 %");
@@ -42,6 +42,8 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _steeringDeadzone = NewNumber(0.000m, 0.500m, 0.015m, 3, 0.005m);
     private readonly NumericUpDown _steeringCurve = NewNumber(0.25m, 4.00m, 1.00m, 2, 0.05m);
     private readonly NumericUpDown _steeringSmoothing = NewNumber(0.00m, 0.95m, 0.00m, 2, 0.05m);
+    private readonly NumericUpDown _predictionMs = NewNumber(0m, 60m, 0m, 0, 1m);
+    private readonly NumericUpDown _predictionMaxBoost = NewNumber(0.00m, 0.30m, 0.12m, 2, 0.01m);
     private readonly NumericUpDown _pedalDeadzone = NewNumber(0.000m, 0.500m, 0.010m, 3, 0.005m);
     private readonly NumericUpDown _handbrakeThreshold = NewNumber(0.00m, 1.00m, 0.50m, 2, 0.05m);
     private readonly NumericUpDown _outputRateCap = NewNumber(0m, 500m, 0m, 0, 10m);
@@ -59,8 +61,8 @@ public sealed class MainForm : Form
 
         Text = "PC Wheel Receiver";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(780, 700);
-        Size = new Size(900, 900);
+        MinimumSize = new Size(800, 720);
+        Size = new Size(940, 980);
         BackColor = Color.FromArgb(18, 18, 20);
         ForeColor = Color.White;
         Font = new Font("Segoe UI", 10f);
@@ -109,7 +111,12 @@ public sealed class MainForm : Form
             ForeColor = Color.Silver,
             Margin = new Padding(0, 0, 0, 18),
         };
-        var heading = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown };
+        var heading = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.TopDown,
+        };
         heading.Controls.Add(title);
         heading.Controls.Add(subtitle);
         root.Controls.Add(heading);
@@ -119,15 +126,15 @@ public sealed class MainForm : Form
         root.Controls.Add(BuildTuningPanel());
         root.Controls.Add(BuildActions());
 
-        var note = new Label
+        root.Controls.Add(new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(810, 0),
+            MaximumSize = new Size(850, 0),
             ForeColor = Color.DarkGray,
-            Text = "Phone TX rate is measured from incoming UDP packets and shown above. Output rate cap only limits analog updates sent to the virtual Xbox controller; it does not change the Android sender frequency. Tuning is applied after UDP parsing, so the 36-byte protocol stays unchanged.",
+            Text = "Phone TX rate is measured from incoming UDP. Output rate cap only limits analog updates sent to the virtual Xbox controller. Prediction is a small velocity-based look-ahead applied after parsing; it never changes the Android 36-byte packet format. Very high prediction can overshoot, so Ultra Responsive uses a conservative 18 ms / 0.12 limit.",
             Margin = new Padding(0, 18, 0, 0),
-        };
-        root.Controls.Add(note);
+        });
+
         return root;
     }
 
@@ -159,13 +166,34 @@ public sealed class MainForm : Form
     private Control BuildTuningPanel()
     {
         var grid = NewGrid();
+
+        var presets = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(3, 2, 3, 8),
+        };
+        var ultra = NewButton("Ultra Responsive");
+        ultra.Click += (_, _) => ApplyUltraResponsivePreset();
+        var balanced = NewButton("Balanced");
+        balanced.Click += (_, _) => ApplyBalancedPreset();
+        var raw = NewButton("Raw");
+        raw.Click += (_, _) => ApplyRawPreset();
+        presets.Controls.Add(ultra);
+        presets.Controls.Add(balanced);
+        presets.Controls.Add(raw);
+        AddRow(grid, "Quick preset", presets);
+
         AddRow(grid, "Invert steering", _invertSteering);
         AddRow(grid, "Steering sensitivity", WithSuffix(_steeringSensitivity, "x"));
-        AddRow(grid, "Steering deadzone", WithSuffix(_steeringDeadzone, "0–0.5"));
-        AddRow(grid, "Steering curve", WithSuffix(_steeringCurve, "1 = linear, >1 softer center"));
-        AddRow(grid, "Steering smoothing", WithSuffix(_steeringSmoothing, "0 = off, 0.95 = heavy"));
+        AddRow(grid, "Steering deadzone", WithSuffix(_steeringDeadzone, "0-0.5"));
+        AddRow(grid, "Steering curve", WithSuffix(_steeringCurve, "1 = linear, <1 quicker center"));
+        AddRow(grid, "Steering smoothing", WithSuffix(_steeringSmoothing, "0 = off"));
+        AddRow(grid, "Prediction look-ahead", WithSuffix(_predictionMs, "ms   (0 = off)"));
+        AddRow(grid, "Prediction max boost", WithSuffix(_predictionMaxBoost, "0-0.30"));
         AddRow(grid, "Pedal deadzone", WithSuffix(_pedalDeadzone, "throttle / brake / clutch"));
-        AddRow(grid, "Handbrake A threshold", WithSuffix(_handbrakeThreshold, "0–1"));
+        AddRow(grid, "Handbrake A threshold", WithSuffix(_handbrakeThreshold, "0-1"));
         AddRow(grid, "Output rate cap", WithSuffix(_outputRateCap, "Hz   (0 = every packet)"));
 
         var actions = new FlowLayoutPanel
@@ -176,7 +204,7 @@ public sealed class MainForm : Form
         };
         var save = NewButton("Save tuning");
         save.Click += (_, _) => SaveTuning();
-        var reset = NewButton("Reset tuning defaults");
+        var reset = NewButton("Reset defaults");
         reset.Click += (_, _) => ResetTuningDefaults();
         actions.Controls.Add(save);
         actions.Controls.Add(reset);
@@ -222,6 +250,8 @@ public sealed class MainForm : Form
         SetValue(_steeringDeadzone, output.SteeringDeadzone);
         SetValue(_steeringCurve, output.SteeringCurve);
         SetValue(_steeringSmoothing, output.SteeringSmoothing);
+        SetValue(_predictionMs, output.SteeringPredictionMs);
+        SetValue(_predictionMaxBoost, output.SteeringPredictionMaxBoost);
         SetValue(_pedalDeadzone, output.PedalDeadzone);
         SetValue(_handbrakeThreshold, output.HandbrakeButtonThreshold);
         SetValue(_outputRateCap, output.OutputRateCapHz);
@@ -234,9 +264,69 @@ public sealed class MainForm : Form
         _steeringDeadzone.ValueChanged += (_, _) => _config.Output.SteeringDeadzone = (float)_steeringDeadzone.Value;
         _steeringCurve.ValueChanged += (_, _) => _config.Output.SteeringCurve = (float)_steeringCurve.Value;
         _steeringSmoothing.ValueChanged += (_, _) => _config.Output.SteeringSmoothing = (float)_steeringSmoothing.Value;
+        _predictionMs.ValueChanged += (_, _) => _config.Output.SteeringPredictionMs = (float)_predictionMs.Value;
+        _predictionMaxBoost.ValueChanged += (_, _) => _config.Output.SteeringPredictionMaxBoost = (float)_predictionMaxBoost.Value;
         _pedalDeadzone.ValueChanged += (_, _) => _config.Output.PedalDeadzone = (float)_pedalDeadzone.Value;
         _handbrakeThreshold.ValueChanged += (_, _) => _config.Output.HandbrakeButtonThreshold = (float)_handbrakeThreshold.Value;
         _outputRateCap.ValueChanged += (_, _) => _config.Output.OutputRateCapHz = (int)_outputRateCap.Value;
+    }
+
+    private void ApplyUltraResponsivePreset()
+    {
+        var output = _config.Output;
+        output.SteeringSensitivity = 1.20f;
+        output.SteeringDeadzone = 0.005f;
+        output.SteeringCurve = 0.90f;
+        output.SteeringSmoothing = 0.00f;
+        output.SteeringPredictionMs = 18f;
+        output.SteeringPredictionMaxBoost = 0.12f;
+        output.PedalDeadzone = 0.005f;
+        output.OutputRateCapHz = 0;
+        LoadTuningControlsFromConfig();
+    }
+
+    private void ApplyBalancedPreset()
+    {
+        var output = _config.Output;
+        output.SteeringSensitivity = 1.05f;
+        output.SteeringDeadzone = 0.010f;
+        output.SteeringCurve = 1.05f;
+        output.SteeringSmoothing = 0.04f;
+        output.SteeringPredictionMs = 0f;
+        output.SteeringPredictionMaxBoost = 0.12f;
+        output.PedalDeadzone = 0.010f;
+        output.OutputRateCapHz = 0;
+        LoadTuningControlsFromConfig();
+    }
+
+    private void ApplyRawPreset()
+    {
+        var output = _config.Output;
+        output.SteeringSensitivity = 1.00f;
+        output.SteeringDeadzone = 0.000f;
+        output.SteeringCurve = 1.00f;
+        output.SteeringSmoothing = 0.00f;
+        output.SteeringPredictionMs = 0f;
+        output.SteeringPredictionMaxBoost = 0.12f;
+        output.PedalDeadzone = 0.000f;
+        output.OutputRateCapHz = 0;
+        LoadTuningControlsFromConfig();
+    }
+
+    private void ResetTuningDefaults()
+    {
+        var output = _config.Output;
+        output.InvertSteering = false;
+        output.SteeringSensitivity = 1.0f;
+        output.SteeringDeadzone = 0.015f;
+        output.SteeringCurve = 1.0f;
+        output.SteeringSmoothing = 0.0f;
+        output.SteeringPredictionMs = 0.0f;
+        output.SteeringPredictionMaxBoost = 0.12f;
+        output.PedalDeadzone = 0.01f;
+        output.HandbrakeButtonThreshold = 0.5f;
+        output.OutputRateCapHz = 0;
+        LoadTuningControlsFromConfig();
     }
 
     private void SaveTuning()
@@ -260,24 +350,11 @@ public sealed class MainForm : Form
         }
     }
 
-    private void ResetTuningDefaults()
-    {
-        _config.Output.InvertSteering = false;
-        _config.Output.SteeringSensitivity = 1.0f;
-        _config.Output.SteeringDeadzone = 0.015f;
-        _config.Output.SteeringCurve = 1.0f;
-        _config.Output.SteeringSmoothing = 0.0f;
-        _config.Output.PedalDeadzone = 0.01f;
-        _config.Output.HandbrakeButtonThreshold = 0.5f;
-        _config.Output.OutputRateCapHz = 0;
-        LoadTuningControlsFromConfig();
-    }
-
     private void InstallVigemDriver()
     {
         var result = MessageBox.Show(
-            "PC Wheel currently uses the ViGEmBus compatibility backend to expose an Xbox 360 controller to games.\n\n" +
-            "This will open an elevated PowerShell window and install ViGEmBus 1.22.0 through WinGet. " +
+            "PC Wheel currently uses ViGEmBus to expose an Xbox 360 controller to games.\n\n" +
+            "This opens an elevated PowerShell window and installs ViGEmBus 1.22.0 through WinGet. " +
             "After installation, close and reopen PC Wheel Receiver.\n\nContinue?",
             "Install virtual controller driver",
             MessageBoxButtons.YesNo,
@@ -300,8 +377,7 @@ public sealed class MainForm : Form
             });
 
             MessageBox.Show(
-                "Finish the driver installation in the PowerShell window, then close and reopen PC Wheel Receiver. " +
-                "The Virtual controller status should turn green after restart.",
+                "Finish the driver installation, then close and reopen PC Wheel Receiver.",
                 "Driver installation started",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
@@ -309,7 +385,7 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             var fallback = MessageBox.Show(
-                $"Automatic installation could not be started:\n{ex.Message}\n\nOpen the official ViGEmBus 1.22.0 release page instead?",
+                $"Automatic installation could not be started:\n{ex.Message}\n\nOpen the official ViGEmBus release page instead?",
                 "Driver installation",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
@@ -492,13 +568,12 @@ public sealed class MainForm : Form
         BackColor = Color.FromArgb(30, 30, 34),
         ForeColor = Color.White,
         BorderStyle = BorderStyle.FixedSingle,
-        Margin = new Padding(3, 3, 3, 3),
+        Margin = new Padding(3),
     };
 
     private static void SetValue(NumericUpDown control, float value)
     {
-        var decimalValue = (decimal)value;
-        control.Value = Math.Clamp(decimalValue, control.Minimum, control.Maximum);
+        control.Value = Math.Clamp((decimal)value, control.Minimum, control.Maximum);
     }
 
     private static void SetValue(NumericUpDown control, int value)
