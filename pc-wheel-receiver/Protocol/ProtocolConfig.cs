@@ -8,8 +8,8 @@ public sealed class ProtocolConfig
     public int ControllerPacketSize { get; set; } = 36;
     public int PingPacketSize { get; set; } = 12;
     public bool EchoPingPackets { get; set; } = true;
-    public string Endianness { get; set; } = "auto";
-    public string AutoPreferredEndianness { get; set; } = "big";
+    public string Endianness { get; set; } = "little";
+    public string AutoPreferredEndianness { get; set; } = "little";
     public FieldLayout Fields { get; set; } = new();
     public OutputConfig Output { get; set; } = new();
 
@@ -17,8 +17,17 @@ public sealed class ProtocolConfig
     {
         if (!File.Exists(path))
         {
-            throw new FileNotFoundException(
-                $"Protocol configuration was not found: {path}", path);
+            var defaults = new ProtocolConfig();
+            try
+            {
+                defaults.Save(path);
+            }
+            catch
+            {
+                // A standalone executable can still run with in-memory defaults even
+                // if its current directory is read-only.
+            }
+            return defaults;
         }
 
         var json = File.ReadAllText(path);
@@ -68,13 +77,15 @@ public sealed class OutputConfig
     public float HandbrakeButtonThreshold { get; set; } = 0.5f;
     public bool MapClutchToRightStickY { get; set; } = true;
 
-    // Live receiver-side tuning. These transform only the virtual-controller output;
-    // the 36-byte Android UDP protocol remains untouched.
+    // Receiver-side tuning. These transform only virtual-controller output;
+    // the Android UDP protocol remains unchanged.
     public bool InvertSteering { get; set; } = false;
     public float SteeringSensitivity { get; set; } = 1.0f;
     public float SteeringDeadzone { get; set; } = 0.015f;
     public float SteeringCurve { get; set; } = 1.0f;
     public float SteeringSmoothing { get; set; } = 0.0f;
+    public float SteeringPredictionMs { get; set; } = 0.0f;
+    public float SteeringPredictionMaxBoost { get; set; } = 0.12f;
     public float PedalDeadzone { get; set; } = 0.01f;
     public int OutputRateCapHz { get; set; } = 0;
 }
