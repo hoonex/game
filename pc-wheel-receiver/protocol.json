@@ -22,6 +22,13 @@
     "cameraBit": 3,
     "resetBit": 4,
     "handbrakeButtonThreshold": 0.5,
-    "mapClutchToRightStickY": true
+    "mapClutchToRightStickY": true,
+    "invertSteering": false,
+    "steeringSensitivity": 1.0,
+    "steeringDeadzone": 0.015,
+    "steeringCurve": 1.0,
+    "steeringSmoothing": 0.0,
+    "pedalDeadzone": 0.01,
+    "outputRateCapHz": 0
   }
 }
