@@ -1,0 +1,38 @@
+{
+  "name": "casual-driving-game",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "dist:win": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "electron": "^37.4.0",
+    "electron-builder": "^26.0.12",
+    "vite": "^7.1.3"
+  },
+  "build": {
+    "appId": "dev.hoonex.casualdrive",
+    "productName": "Casual Drive",
+    "files": [
+      "dist/**/*",
+      "electron.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "CasualDrive-${version}-win-x64.exe"
+    }
+  }
+}
