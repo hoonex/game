@@ -35,18 +35,28 @@ jobs:
       - name: Build
         run: dotnet build -c Release --no-restore
 
-      - name: Publish win-x64
+      - name: Publish win-x64 folder
         run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o publish/win-x64
 
       - name: Create release ZIP
         shell: pwsh
         run: Compress-Archive -Path publish/win-x64/* -DestinationPath publish/PCWheelReceiver-win-x64.zip -Force
 
+      - name: Publish standalone win-x64 EXE
+        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o publish/standalone
+
+      - name: Prepare standalone asset
+        shell: pwsh
+        run: Copy-Item publish/standalone/PCWheelReceiver.exe publish/PCWheelReceiver-standalone-win-x64.exe -Force
+
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
           name: PCWheelReceiver-win-x64
-          path: pc-wheel-receiver/publish/win-x64/
+          path: |
+            pc-wheel-receiver/publish/win-x64/
+            pc-wheel-receiver/publish/PCWheelReceiver-win-x64.zip
+            pc-wheel-receiver/publish/PCWheelReceiver-standalone-win-x64.exe
 
       - name: Publish direct-download GitHub Release
         if: github.event_name == 'push'
@@ -56,9 +66,10 @@ jobs:
         run: |
           $tag = "pc-wheel-v0.1.0"
           $zip = "publish/PCWheelReceiver-win-x64.zip"
+          $exe = "publish/PCWheelReceiver-standalone-win-x64.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $zip --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $tag $zip $exe --repo $env:GITHUB_REPOSITORY --clobber
           } else {
-            gh release create $tag $zip --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "PC Wheel Receiver v0.1.0" --notes "Windows x64 receiver for the Android PC Wheel app. Protocol: 36-byte little-endian UDP state packet with 12-byte header echo for RTT."
+            gh release create $tag $zip $exe --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "PC Wheel Receiver v0.1.0" --notes "Windows x64 receiver for the Android PC Wheel app. Includes live steering tuning and an Ultra Responsive preset with bounded steering prediction."
           }
