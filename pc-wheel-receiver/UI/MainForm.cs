@@ -9,6 +9,7 @@ namespace PCWheelReceiver.UI;
 
 public sealed class MainForm : Form
 {
+    private const string VigemReleaseUrl = "https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0";
     private readonly string _configPath;
     private readonly ProtocolConfig _config;
     private readonly UdpReceiverService _receiver;
@@ -165,9 +166,66 @@ public sealed class MainForm : Form
         var copyIp = NewButton("Copy PC IPv4");
         copyIp.Click += (_, _) => Clipboard.SetText(GetFirstLocalIpv4() ?? "127.0.0.1");
 
+        var installDriver = NewButton(_output.IsConnected ? "Xbox driver ready" : "Install Xbox driver");
+        installDriver.Enabled = !_output.IsConnected;
+        installDriver.Click += (_, _) => InstallVigemDriver();
+
         panel.Controls.Add(openConfig);
         panel.Controls.Add(copyIp);
+        panel.Controls.Add(installDriver);
         return panel;
+    }
+
+    private void InstallVigemDriver()
+    {
+        var result = MessageBox.Show(
+            "PC Wheel currently uses the ViGEmBus compatibility backend to expose an Xbox 360 controller to games.\n\n" +
+            "This will open an elevated PowerShell window and install ViGEmBus 1.22.0 through WinGet. " +
+            "After installation, close and reopen PC Wheel Receiver.\n\nContinue?",
+            "Install virtual controller driver",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information);
+
+        if (result != DialogResult.Yes) return;
+
+        try
+        {
+            const string command =
+                "winget install --id ViGEm.ViGEmBus --exact --version 1.22.0 " +
+                "--accept-package-agreements --accept-source-agreements";
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+
+            MessageBox.Show(
+                "Finish the driver installation in the PowerShell window, then close and reopen PC Wheel Receiver. " +
+                "The Virtual controller status should turn green after restart.",
+                "Driver installation started",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            var fallback = MessageBox.Show(
+                $"Automatic installation could not be started:\n{ex.Message}\n\nOpen the official ViGEmBus 1.22.0 release page instead?",
+                "Driver installation",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (fallback == DialogResult.Yes)
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = VigemReleaseUrl,
+                    UseShellExecute = true,
+                });
+            }
+        }
     }
 
     private void StartReceiver()
