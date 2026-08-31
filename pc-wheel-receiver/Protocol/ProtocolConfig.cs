@@ -22,15 +22,22 @@ public sealed class ProtocolConfig
         }
 
         var json = File.ReadAllText(path);
-        var config = JsonSerializer.Deserialize<ProtocolConfig>(json, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-        });
-
+        var config = JsonSerializer.Deserialize<ProtocolConfig>(json, JsonOptions());
         return config ?? throw new InvalidDataException("protocol.json could not be parsed.");
     }
+
+    public void Save(string path)
+    {
+        File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions(writeIndented: true)));
+    }
+
+    private static JsonSerializerOptions JsonOptions(bool writeIndented = false) => new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+        WriteIndented = writeIndented,
+    };
 }
 
 public sealed class FieldLayout
@@ -60,4 +67,14 @@ public sealed class OutputConfig
     public int ResetBit { get; set; } = 4;
     public float HandbrakeButtonThreshold { get; set; } = 0.5f;
     public bool MapClutchToRightStickY { get; set; } = true;
+
+    // Live receiver-side tuning. These transform only the virtual-controller output;
+    // the 36-byte Android UDP protocol remains untouched.
+    public bool InvertSteering { get; set; } = false;
+    public float SteeringSensitivity { get; set; } = 1.0f;
+    public float SteeringDeadzone { get; set; } = 0.015f;
+    public float SteeringCurve { get; set; } = 1.0f;
+    public float SteeringSmoothing { get; set; } = 0.0f;
+    public float PedalDeadzone { get; set; } = 0.01f;
+    public int OutputRateCapHz { get; set; } = 0;
 }
