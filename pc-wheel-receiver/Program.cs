@@ -32,7 +32,9 @@ internal static class Program
             using (output)
             using (var receiver = new UdpReceiverService(config, output))
             {
-                Application.Run(new MainForm(configPath, config, receiver, output));
+                var form = new MainForm(configPath, config, receiver, output);
+                EnableReliableVerticalScrolling(form);
+                Application.Run(form);
             }
         }
         catch (Exception ex)
@@ -43,5 +45,47 @@ internal static class Program
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+    }
+
+    private static void EnableReliableVerticalScrolling(Form form)
+    {
+        // MainForm's root TableLayoutPanel used Dock=Fill + AutoScroll. That combination
+        // can keep the layout constrained to the viewport, so WinForms never sees a
+        // content height larger than the window and no useful vertical scrollbar appears.
+        // Let the form own scrolling and let the root measure its natural content height.
+        form.AutoScroll = true;
+        form.AutoScrollMinSize = new Size(0, 1);
+
+        if (form.Controls.Count == 0 || form.Controls[0] is not TableLayoutPanel root)
+            return;
+
+        root.AutoScroll = false;
+        root.Dock = DockStyle.Top;
+        root.AutoSize = true;
+        root.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        root.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+        foreach (RowStyle rowStyle in root.RowStyles)
+        {
+            rowStyle.SizeType = SizeType.AutoSize;
+            rowStyle.Height = 0;
+        }
+
+        void RefreshScrollExtent()
+        {
+            var scrollWidth = form.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
+            root.Width = Math.Max(form.ClientSize.Width - scrollWidth, form.MinimumSize.Width - scrollWidth);
+            root.PerformLayout();
+            form.AutoScrollMinSize = new Size(0, root.PreferredSize.Height);
+        }
+
+        form.Shown += (_, _) => RefreshScrollExtent();
+        form.Resize += (_, _) => RefreshScrollExtent();
+        root.Layout += (_, _) =>
+        {
+            var preferredHeight = root.PreferredSize.Height;
+            if (form.AutoScrollMinSize.Height != preferredHeight)
+                form.AutoScrollMinSize = new Size(0, preferredHeight);
+        };
     }
 }
