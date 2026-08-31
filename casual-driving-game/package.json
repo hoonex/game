@@ -20,6 +20,9 @@
   "build": {
     "appId": "dev.hoonex.casualdrive",
     "productName": "Casual Drive",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**/*",
       "electron.cjs",
