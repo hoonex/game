@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.Xbox360;
@@ -11,6 +12,9 @@ public sealed class Xbox360Output : IControllerOutput
     private readonly OutputConfig _config;
     private readonly ViGEmClient _client;
     private readonly IXbox360Controller _controller;
+    private readonly Stopwatch _outputClock = Stopwatch.StartNew();
+    private long _lastAnalogOutputTicks;
+    private float _smoothedSteering;
     private bool _disposed;
 
     public Xbox360Output(OutputConfig config)
@@ -30,27 +34,77 @@ public sealed class Xbox360Output : IControllerOutput
     {
         if (_disposed || !IsConnected) return;
 
-        var steering = state.Steering >= 0
-            ? (short)Math.Round(state.Steering * short.MaxValue)
-            : (short)Math.Round(state.Steering * -short.MinValue);
-
-        _controller.SetAxisValue(Xbox360Axis.LeftThumbX, steering);
-        _controller.SetSliderValue(Xbox360Slider.RightTrigger, ToByte(state.Throttle));
-        _controller.SetSliderValue(Xbox360Slider.LeftTrigger, ToByte(state.Brake));
-
-        if (_config.MapClutchToRightStickY)
-        {
-            _controller.SetAxisValue(Xbox360Axis.RightThumbY,
-                (short)Math.Round(Math.Clamp(state.Clutch, 0f, 1f) * short.MaxValue));
-        }
-
+        // Buttons are always updated so a low analog rate cap cannot swallow short presses.
         _controller.SetButtonState(Xbox360Button.A,
-            state.Handbrake >= _config.HandbrakeButtonThreshold);
+            state.Handbrake >= Math.Clamp(_config.HandbrakeButtonThreshold, 0f, 1f));
         _controller.SetButtonState(Xbox360Button.RightShoulder, IsBitSet(state.Buttons, _config.ShiftUpBit));
         _controller.SetButtonState(Xbox360Button.LeftShoulder, IsBitSet(state.Buttons, _config.ShiftDownBit));
         _controller.SetButtonState(Xbox360Button.B, IsBitSet(state.Buttons, _config.HornBit));
         _controller.SetButtonState(Xbox360Button.Y, IsBitSet(state.Buttons, _config.CameraBit));
         _controller.SetButtonState(Xbox360Button.X, IsBitSet(state.Buttons, _config.ResetBit));
+
+        if (!ShouldUpdateAnalog()) return;
+
+        var steeringValue = TransformSteering(state.Steering);
+        var steering = steeringValue >= 0
+            ? (short)Math.Round(steeringValue * short.MaxValue)
+            : (short)Math.Round(steeringValue * -short.MinValue);
+
+        _controller.SetAxisValue(Xbox360Axis.LeftThumbX, steering);
+        _controller.SetSliderValue(Xbox360Slider.RightTrigger, ToByte(TransformPedal(state.Throttle)));
+        _controller.SetSliderValue(Xbox360Slider.LeftTrigger, ToByte(TransformPedal(state.Brake)));
+
+        if (_config.MapClutchToRightStickY)
+        {
+            _controller.SetAxisValue(Xbox360Axis.RightThumbY,
+                (short)Math.Round(TransformPedal(state.Clutch) * short.MaxValue));
+        }
+    }
+
+    private float TransformSteering(float raw)
+    {
+        var value = Math.Clamp(raw, -1f, 1f);
+        if (_config.InvertSteering) value = -value;
+
+        var deadzone = Math.Clamp(_config.SteeringDeadzone, 0f, 0.5f);
+        var magnitude = Math.Abs(value);
+        if (magnitude <= deadzone)
+        {
+            value = 0f;
+        }
+        else
+        {
+            magnitude = (magnitude - deadzone) / Math.Max(0.0001f, 1f - deadzone);
+            var curve = Math.Clamp(_config.SteeringCurve, 0.25f, 4f);
+            magnitude = MathF.Pow(magnitude, curve);
+            magnitude *= Math.Clamp(_config.SteeringSensitivity, 0.1f, 3f);
+            value = MathF.CopySign(Math.Clamp(magnitude, 0f, 1f), value);
+        }
+
+        var smoothing = Math.Clamp(_config.SteeringSmoothing, 0f, 0.95f);
+        _smoothedSteering = (_smoothedSteering * smoothing) + (value * (1f - smoothing));
+        return Math.Clamp(_smoothedSteering, -1f, 1f);
+    }
+
+    private float TransformPedal(float raw)
+    {
+        var value = Math.Clamp(raw, 0f, 1f);
+        var deadzone = Math.Clamp(_config.PedalDeadzone, 0f, 0.5f);
+        if (value <= deadzone) return 0f;
+        return Math.Clamp((value - deadzone) / Math.Max(0.0001f, 1f - deadzone), 0f, 1f);
+    }
+
+    private bool ShouldUpdateAnalog()
+    {
+        var cap = Math.Clamp(_config.OutputRateCapHz, 0, 500);
+        if (cap <= 0) return true;
+
+        var now = _outputClock.ElapsedTicks;
+        var minimumTicks = Math.Max(1L, Stopwatch.Frequency / cap);
+        if (now - _lastAnalogOutputTicks < minimumTicks) return false;
+
+        _lastAnalogOutputTicks = now;
+        return true;
     }
 
     private static bool IsBitSet(uint mask, int bit) =>
