@@ -14,6 +14,8 @@ public sealed class Xbox360Output : IControllerOutput
     private readonly IXbox360Controller _controller;
     private readonly Stopwatch _outputClock = Stopwatch.StartNew();
     private long _lastAnalogOutputTicks;
+    private long _lastPredictionTicks;
+    private float _lastPredictionSample;
     private float _smoothedSteering;
     private bool _disposed;
 
@@ -81,9 +83,48 @@ public sealed class Xbox360Output : IControllerOutput
             value = MathF.CopySign(Math.Clamp(magnitude, 0f, 1f), value);
         }
 
+        value = ApplySteeringPrediction(value);
+
         var smoothing = Math.Clamp(_config.SteeringSmoothing, 0f, 0.95f);
         _smoothedSteering = (_smoothedSteering * smoothing) + (value * (1f - smoothing));
         return Math.Clamp(_smoothedSteering, -1f, 1f);
+    }
+
+    private float ApplySteeringPrediction(float value)
+    {
+        var now = _outputClock.ElapsedTicks;
+        var lookAheadMs = Math.Clamp(_config.SteeringPredictionMs, 0f, 60f);
+
+        if (_lastPredictionTicks == 0)
+        {
+            _lastPredictionTicks = now;
+            _lastPredictionSample = value;
+            return value;
+        }
+
+        var dt = (now - _lastPredictionTicks) / (float)Stopwatch.Frequency;
+        var previous = _lastPredictionSample;
+        _lastPredictionTicks = now;
+        _lastPredictionSample = value;
+
+        if (lookAheadMs <= 0f || dt <= 0f || dt > 0.100f)
+        {
+            return value;
+        }
+
+        // Do not predict through the center or across a direction reversal; those are
+        // the cases where lead compensation is most likely to cause visible overshoot.
+        if (value == 0f || value * previous < 0f)
+        {
+            return value;
+        }
+
+        var velocity = Math.Clamp((value - previous) / dt, -12f, 12f);
+        var predictedDelta = velocity * (lookAheadMs / 1000f);
+        var maxBoost = Math.Clamp(_config.SteeringPredictionMaxBoost, 0f, 0.30f);
+        predictedDelta = Math.Clamp(predictedDelta, -maxBoost, maxBoost);
+
+        return Math.Clamp(value + predictedDelta, -1f, 1f);
     }
 
     private float TransformPedal(float raw)
