@@ -28,6 +28,8 @@
     "steeringDeadzone": 0.015,
     "steeringCurve": 1.0,
     "steeringSmoothing": 0.0,
+    "steeringPredictionMs": 0.0,
+    "steeringPredictionMaxBoost": 0.12,
     "pedalDeadzone": 0.01,
     "outputRateCapHz": 0
   }
