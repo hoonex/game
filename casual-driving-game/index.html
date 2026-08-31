@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Casual Drive</title>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div class="topbar">
+        <div><span class="dot" id="padDot"></span><span id="padText">KEYBOARD</span></div>
+        <div id="cameraText">CHASE CAM</div>
+      </div>
+      <div class="speed"><span id="speed">0</span><small>km/h</small></div>
+      <div class="gear" id="gear">N</div>
+      <canvas id="minimap" width="180" height="180"></canvas>
+      <div class="controls" id="controls">WASD / Arrows · Space Handbrake · R Reset · C Camera · H Horn</div>
+    </div>
+    <div id="startScreen">
+      <div class="panel">
+        <div class="eyebrow">CASUAL FREE ROAM</div>
+        <h1>CASUAL DRIVE</h1>
+        <p>Drive anywhere. Your virtual Xbox 360 controller is supported automatically.</p>
+        <button id="startButton">START DRIVING</button>
+        <div class="hint">Phone wheel: Left Stick steer · RT throttle · LT brake/reverse · A handbrake · X reset · Y camera · B horn</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
