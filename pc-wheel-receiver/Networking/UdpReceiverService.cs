@@ -14,6 +14,7 @@ public sealed class UdpReceiverService : IDisposable
     private readonly DynamicPacketParser _parser;
     private readonly object _sync = new();
     private readonly Stopwatch _rateWindow = Stopwatch.StartNew();
+    private readonly Stopwatch _snapshotWindow = Stopwatch.StartNew();
 
     private UdpClient? _udp;
     private CancellationTokenSource? _cts;
@@ -22,6 +23,7 @@ public sealed class UdpReceiverService : IDisposable
     private long _lost;
     private long _invalid;
     private long _windowPackets;
+    private long _lastSnapshotPublishTicks;
     private double _packetRate;
     private uint? _lastSequence;
     private ControllerState? _state;
@@ -89,21 +91,9 @@ public sealed class UdpReceiverService : IDisposable
                     {
                         _invalid++;
                         _lastError = $"Ignored UDP packet with unexpected size {result.Buffer.Length}.";
-                        PublishLocked();
+                        PublishLocked(force: true);
                     }
                     continue;
-                }
-
-                // Android PC Wheel latency protocol: every valid-size 36-byte controller datagram
-                // is acknowledged by echoing its first 12 bytes (sequence + timestamp) verbatim.
-                // Echo before parsing/output so RTT measurement is not inflated by controller work.
-                if (_config.EchoPingPackets && _config.PingPacketSize > 0 &&
-                    _config.PingPacketSize <= result.Buffer.Length)
-                {
-                    await _udp.SendAsync(
-                        result.Buffer.AsMemory(0, _config.PingPacketSize),
-                        result.RemoteEndPoint,
-                        cancellationToken);
                 }
 
                 if (!_parser.TryParse(result.Buffer, out var state, out var parseError))
@@ -112,23 +102,45 @@ public sealed class UdpReceiverService : IDisposable
                     {
                         _invalid++;
                         _lastError = parseError;
-                        PublishLocked();
+                        PublishLocked(force: true);
                     }
                     continue;
                 }
 
+                // Real-time control gets first priority. Previously the receive loop awaited
+                // the RTT header echo before applying the controller state, which put telemetry
+                // work directly in front of the steering hot path.
+                string? outputError = null;
                 try
                 {
                     _output.Apply(state);
                 }
                 catch (Exception ex)
                 {
-                    lock (_sync)
+                    outputError = $"Virtual controller output failed: {ex.Message}";
+                }
+
+                // Echo the Android sequence + timestamp only after the virtual-controller update.
+                // RTT now includes the tiny receiver processing cost, while steering is no longer
+                // delayed by an awaited UDP send.
+                if (_config.EchoPingPackets && _config.PingPacketSize > 0 &&
+                    _config.PingPacketSize <= result.Buffer.Length)
+                {
+                    try
                     {
-                        _lastError = $"Virtual controller output failed: {ex.Message}";
-                        PublishLocked();
+                        await _udp.SendAsync(
+                            result.Buffer.AsMemory(0, _config.PingPacketSize),
+                            result.RemoteEndPoint,
+                            cancellationToken);
                     }
-                    continue;
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        outputError ??= $"RTT echo failed: {ex.Message}";
+                    }
                 }
 
                 lock (_sync)
@@ -139,9 +151,13 @@ public sealed class UdpReceiverService : IDisposable
                     _state = state;
                     _remote = result.RemoteEndPoint;
                     _lastPacketAt = DateTimeOffset.Now;
-                    _lastError = null;
+                    _lastError = outputError;
                     UpdateRate();
-                    PublishLocked();
+
+                    // The WinForms UI renders at roughly 30 Hz. Publishing a new snapshot for
+                    // every ~100 Hz Android packet only creates extra allocations/event work and
+                    // slows the loop that should be receiving the next steering sample.
+                    PublishLocked(force: outputError is not null);
                 }
             }
         }
@@ -153,7 +169,7 @@ public sealed class UdpReceiverService : IDisposable
             lock (_sync)
             {
                 _lastError = $"UDP receiver stopped: {ex.Message}";
-                PublishLocked();
+                PublishLocked(force: true);
             }
         }
     }
@@ -196,10 +212,17 @@ public sealed class UdpReceiverService : IDisposable
         _parser.DetectedEndianness,
         _lastError);
 
-    private void PublishLocked()
+    private void PublishLocked(bool force = false)
     {
-        var snapshot = BuildSnapshot();
-        SnapshotUpdated?.Invoke(this, snapshot);
+        var handler = SnapshotUpdated;
+        if (handler is null) return;
+
+        var now = _snapshotWindow.ElapsedTicks;
+        var minTicks = Math.Max(1L, Stopwatch.Frequency / 30);
+        if (!force && now - _lastSnapshotPublishTicks < minTicks) return;
+
+        _lastSnapshotPublishTicks = now;
+        handler.Invoke(this, BuildSnapshot());
     }
 
     public void Dispose()
