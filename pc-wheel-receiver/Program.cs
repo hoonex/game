@@ -31,7 +31,18 @@ internal static class Program
 
             using (output)
             using (var receiver = new UdpReceiverService(config, output))
+            using (var discovery = new DiscoveryService(config.ListenPort))
             {
+                try
+                {
+                    discovery.Start();
+                }
+                catch
+                {
+                    // Discovery is optional. Manual IP connection and the 26760 controller path
+                    // must remain available even if UDP 26761 is unavailable or blocked.
+                }
+
                 var form = new MainForm(configPath, config, receiver, output);
                 EnableReliableVerticalScrolling(form);
                 Application.Run(form);
