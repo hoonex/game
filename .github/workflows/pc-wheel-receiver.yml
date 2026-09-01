@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - feat/pc-wheel-receiver
-      - ulw/pc-wheel-discovery-v1
     paths:
       - "pc-wheel-receiver/**"
       - ".github/workflows/pc-wheel-receiver.yml"
