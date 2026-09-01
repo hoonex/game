@@ -24,6 +24,12 @@ public sealed class Xbox360Output : IControllerOutput
         _config = config;
         _client = new ViGEmClient();
         _controller = _client.CreateXbox360Controller();
+
+        // ViGEm.NET normally submits the full XUSB report after every individual
+        // SetButtonState/SetAxisValue/SetSliderValue call. A single controller packet
+        // updates several fields, so that default behavior causes many kernel/bus updates
+        // for one Android packet. Batch all field changes and submit exactly once.
+        _controller.AutoSubmitReport = false;
         _controller.Connect();
         IsConnected = true;
         Status = "Xbox 360 virtual controller connected";
@@ -36,7 +42,6 @@ public sealed class Xbox360Output : IControllerOutput
     {
         if (_disposed || !IsConnected) return;
 
-        // Buttons are always updated so a low analog rate cap cannot swallow short presses.
         _controller.SetButtonState(Xbox360Button.A,
             state.Handbrake >= Math.Clamp(_config.HandbrakeButtonThreshold, 0f, 1f));
         _controller.SetButtonState(Xbox360Button.RightShoulder, IsBitSet(state.Buttons, _config.ShiftUpBit));
@@ -45,22 +50,27 @@ public sealed class Xbox360Output : IControllerOutput
         _controller.SetButtonState(Xbox360Button.Y, IsBitSet(state.Buttons, _config.CameraBit));
         _controller.SetButtonState(Xbox360Button.X, IsBitSet(state.Buttons, _config.ResetBit));
 
-        if (!ShouldUpdateAnalog()) return;
-
-        var steeringValue = TransformSteering(state.Steering);
-        var steering = steeringValue >= 0
-            ? (short)Math.Round(steeringValue * short.MaxValue)
-            : (short)Math.Round(steeringValue * -short.MinValue);
-
-        _controller.SetAxisValue(Xbox360Axis.LeftThumbX, steering);
-        _controller.SetSliderValue(Xbox360Slider.RightTrigger, ToByte(TransformPedal(state.Throttle)));
-        _controller.SetSliderValue(Xbox360Slider.LeftTrigger, ToByte(TransformPedal(state.Brake)));
-
-        if (_config.MapClutchToRightStickY)
+        if (ShouldUpdateAnalog())
         {
-            _controller.SetAxisValue(Xbox360Axis.RightThumbY,
-                (short)Math.Round(TransformPedal(state.Clutch) * short.MaxValue));
+            var steeringValue = TransformSteering(state.Steering);
+            var steering = steeringValue >= 0
+                ? (short)Math.Round(steeringValue * short.MaxValue)
+                : (short)Math.Round(steeringValue * -short.MinValue);
+
+            _controller.SetAxisValue(Xbox360Axis.LeftThumbX, steering);
+            _controller.SetSliderValue(Xbox360Slider.RightTrigger, ToByte(TransformPedal(state.Throttle)));
+            _controller.SetSliderValue(Xbox360Slider.LeftTrigger, ToByte(TransformPedal(state.Brake)));
+
+            if (_config.MapClutchToRightStickY)
+            {
+                _controller.SetAxisValue(Xbox360Axis.RightThumbY,
+                    (short)Math.Round(TransformPedal(state.Clutch) * short.MaxValue));
+            }
         }
+
+        // One atomic virtual-controller update per Android packet. Buttons remain immediate
+        // even when an analog output-rate cap is configured.
+        _controller.SubmitReport();
     }
 
     private float TransformSteering(float raw)
