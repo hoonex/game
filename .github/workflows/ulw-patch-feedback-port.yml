@@ -1,0 +1,45 @@
+name: ULW feedback port patch
+
+on:
+  push:
+    branches:
+      - ulw/game-rumble-feedback-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ulw/game-rumble-feedback-20260902
+          fetch-depth: 0
+      - name: Route feedback to UDP 26762
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('pc-wheel-receiver/Networking/UdpReceiverService.cs')
+          text = path.read_text()
+          old = '            remote = _remote;'
+          new = '            remote = _remote is null ? null : new IPEndPoint(_remote.Address, 26762);'
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('feedback remote marker not found')
+          text = text.replace(
+              '// Separate 8-byte PCFB packet. Existing 36-byte controller packets and 12-byte RTT',
+              '// Separate 8-byte PCFB packet to the Android feedback port 26762. Existing 36-byte controller packets and 12-byte RTT',
+              1,
+          )
+          path.write_text(text)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pc-wheel-receiver/Networking/UdpReceiverService.cs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'feat(pc-wheel): route rumble to Android feedback port'
+          git push origin HEAD:ulw/game-rumble-feedback-20260902
