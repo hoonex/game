@@ -11,6 +11,8 @@ public sealed class UdpReceiverService : IDisposable
 {
     private const int FeedbackPacketSize = 8;
     private const int FeedbackPort = 26762;
+    private const int FeedbackHeartbeatMs = 40;
+    private const int FeedbackRemoteFreshnessMs = 1000;
 
     private readonly ProtocolConfig _config;
     private readonly IControllerOutput _output;
@@ -19,10 +21,13 @@ public sealed class UdpReceiverService : IDisposable
     private readonly object _sync = new();
     private readonly Stopwatch _rateWindow = Stopwatch.StartNew();
     private readonly Stopwatch _snapshotWindow = Stopwatch.StartNew();
+    private readonly SemaphoreSlim _feedbackSignal = new(0, 1);
 
     private UdpClient? _udp;
+    private UdpClient? _feedbackUdp;
     private CancellationTokenSource? _cts;
     private Task? _receiveTask;
+    private Task? _feedbackTask;
     private long _received;
     private long _lost;
     private long _invalid;
@@ -34,6 +39,8 @@ public sealed class UdpReceiverService : IDisposable
     private IPEndPoint? _remote;
     private DateTimeOffset? _lastPacketAt;
     private string? _lastError;
+    private byte _feedbackLargeMotor;
+    private byte _feedbackSmallMotor;
     private bool _disposed;
 
     public UdpReceiverService(ProtocolConfig config, IControllerOutput output)
@@ -60,7 +67,14 @@ public sealed class UdpReceiverService : IDisposable
         _cts = new CancellationTokenSource();
         _udp = new UdpClient(new IPEndPoint(IPAddress.Any, _config.ListenPort));
         _udp.Client.ReceiveBufferSize = 1 << 20;
+
+        // Keep game feedback off the 26760 receive socket so rumble traffic can never
+        // contend with the steering hot path. The destination remains Android UDP 26762.
+        _feedbackUdp = new UdpClient();
+        _feedbackUdp.Client.SendBufferSize = 64 * 1024;
+
         _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts.Token));
+        _feedbackTask = Task.Run(() => FeedbackLoopAsync(_cts.Token));
     }
 
     public ReceiverSnapshot GetSnapshot()
@@ -73,19 +87,101 @@ public sealed class UdpReceiverService : IDisposable
 
     private void OnGameFeedbackReceived(byte largeMotor, byte smallMotor)
     {
-        UdpClient? udp;
-        IPEndPoint? remote;
+        if (_disposed) return;
+
         lock (_sync)
         {
-            udp = _udp;
-            remote = _remote is null ? null : new IPEndPoint(_remote.Address, FeedbackPort);
+            _feedbackLargeMotor = largeMotor;
+            _feedbackSmallMotor = smallMotor;
         }
 
-        if (_disposed || udp is null || remote is null) return;
+        // FeedbackReceived is change-driven. Wake the relay immediately for low latency;
+        // the background loop also repeats non-zero state as a lightweight heartbeat.
+        if (_feedbackSignal.CurrentCount == 0)
+        {
+            try
+            {
+                _feedbackSignal.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
 
-        // Separate 8-byte PCFB packet to Android feedback port 26762. Existing controller
-        // packets and RTT echoes stay byte-for-byte compatible with older builds.
-        var packet = new byte[FeedbackPacketSize]
+    private async Task FeedbackLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                bool signaled;
+                try
+                {
+                    signaled = await _feedbackSignal
+                        .WaitAsync(FeedbackHeartbeatMs, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                UdpClient? udp;
+                IPEndPoint? remote;
+                DateTimeOffset? lastPacketAt;
+                byte largeMotor;
+                byte smallMotor;
+
+                lock (_sync)
+                {
+                    udp = _feedbackUdp;
+                    remote = _remote is null
+                        ? null
+                        : new IPEndPoint(_remote.Address, FeedbackPort);
+                    lastPacketAt = _lastPacketAt;
+                    largeMotor = _feedbackLargeMotor;
+                    smallMotor = _feedbackSmallMotor;
+                }
+
+                if (udp is null || remote is null || lastPacketAt is null)
+                {
+                    continue;
+                }
+
+                // Do not keep relaying to a phone that has stopped sending controller
+                // packets. Android independently stops stale feedback as an extra guard.
+                if ((DateTimeOffset.Now - lastPacketAt.Value).TotalMilliseconds >
+                    FeedbackRemoteFreshnessMs)
+                {
+                    continue;
+                }
+
+                // Zero feedback only needs one immediate packet. Non-zero feedback is
+                // repeated every 40 ms so Android can distinguish a live sustained rumble
+                // from a lost final packet and stop safely within its freshness window.
+                if (!signaled && largeMotor == 0 && smallMotor == 0)
+                {
+                    continue;
+                }
+
+                await SendFeedbackAsync(
+                        udp,
+                        remote,
+                        BuildFeedbackPacket(largeMotor, smallMotor))
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (SocketException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static byte[] BuildFeedbackPacket(byte largeMotor, byte smallMotor) =>
+        new byte[FeedbackPacketSize]
         {
             (byte)'P', (byte)'C', (byte)'F', (byte)'B',
             1,
@@ -93,10 +189,11 @@ public sealed class UdpReceiverService : IDisposable
             smallMotor,
             0,
         };
-        _ = SendFeedbackAsync(udp, remote, packet);
-    }
 
-    private static async Task SendFeedbackAsync(UdpClient udp, IPEndPoint remote, byte[] packet)
+    private static async Task SendFeedbackAsync(
+        UdpClient udp,
+        IPEndPoint remote,
+        byte[] packet)
     {
         try
         {
@@ -109,6 +206,34 @@ public sealed class UdpReceiverService : IDisposable
         catch (SocketException)
         {
             // Rumble is best-effort and must never stall or fail the steering hot path.
+        }
+    }
+
+    private void SendFeedbackStopBestEffort()
+    {
+        UdpClient? udp;
+        IPEndPoint? remote;
+        lock (_sync)
+        {
+            udp = _feedbackUdp;
+            remote = _remote is null
+                ? null
+                : new IPEndPoint(_remote.Address, FeedbackPort);
+            _feedbackLargeMotor = 0;
+            _feedbackSmallMotor = 0;
+        }
+
+        if (udp is null || remote is null) return;
+
+        try
+        {
+            udp.Send(BuildFeedbackPacket(0, 0), FeedbackPacketSize, remote);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (SocketException)
+        {
         }
     }
 
@@ -161,6 +286,7 @@ public sealed class UdpReceiverService : IDisposable
                 lock (_sync)
                 {
                     _remote = result.RemoteEndPoint;
+                    _lastPacketAt = DateTimeOffset.Now;
                 }
 
                 string? outputError = null;
@@ -277,15 +403,24 @@ public sealed class UdpReceiverService : IDisposable
         {
             _feedbackSource.GameFeedbackReceived -= OnGameFeedbackReceived;
         }
+
+        // Stop the phone immediately on normal receiver shutdown rather than waiting for
+        // Android's stale-feedback watchdog.
+        SendFeedbackStopBestEffort();
+
         _cts?.Cancel();
         _udp?.Dispose();
+        _feedbackUdp?.Dispose();
         try
         {
             _receiveTask?.Wait(TimeSpan.FromSeconds(1));
+            _feedbackTask?.Wait(TimeSpan.FromSeconds(1));
         }
         catch
         {
         }
+
         _cts?.Dispose();
+        _feedbackSignal.Dispose();
     }
 }
