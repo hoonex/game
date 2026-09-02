@@ -18,9 +18,9 @@ internal static class Program
             var configPath = Path.Combine(AppContext.BaseDirectory, "protocol.json");
             var config = ProtocolConfig.Load(configPath);
 
-            // Start in WEB SAFE mode. No virtual Xbox device exists until the user
-            // explicitly enables Xbox mode, so desktop gamepad-to-mouse mappings cannot
-            // move the pointer while using browser games.
+            // Start in WEB SAFE mode. No virtual controller exists until the user chooses
+            // an analog gamepad mode, so desktop controller-to-mouse mappings cannot move
+            // the pointer immediately after launch.
             using var output = new SwitchableControllerOutput(config.Output);
             using var receiver = new UdpReceiverService(config, output);
             using var discovery = new DiscoveryService(config.ListenPort);
@@ -76,6 +76,13 @@ internal static class Program
             Padding = new Padding(8, 3, 8, 3),
         };
 
+        var webGamepadButton = new Button
+        {
+            Text = "WEB GAMEPAD (DS4)",
+            AutoSize = true,
+            Padding = new Padding(8, 3, 8, 3),
+        };
+
         var xboxButton = new Button
         {
             Text = "XBOX + RUMBLE",
@@ -85,7 +92,7 @@ internal static class Program
 
         var testButton = new Button
         {
-            Text = "Test Xbox (joy.cpl)",
+            Text = "Test controller (joy.cpl)",
             AutoSize = true,
             Padding = new Padding(8, 3, 8, 3),
         };
@@ -105,16 +112,46 @@ internal static class Program
 
         void RefreshBanner()
         {
-            var webSafe = output.Mode == ControllerOutputMode.WebSafe;
-            banner.BackColor = webSafe
-                ? Color.FromArgb(18, 72, 45)
-                : Color.FromArgb(27, 62, 96);
-            status.Text = webSafe
-                ? "WEB SAFE ACTIVE  •  Xbox device disconnected  •  Wheel=A/D  Throttle=W  Brake/Reverse=S  Handbrake=Space"
-                : $"XBOX MODE ACTIVE  •  {output.Status}";
-            webButton.Enabled = !webSafe;
-            xboxButton.Enabled = webSafe;
-            testButton.Enabled = !webSafe;
+            var mode = output.Mode;
+            banner.BackColor = mode switch
+            {
+                ControllerOutputMode.WebSafe => Color.FromArgb(18, 72, 45),
+                ControllerOutputMode.WebGamepad => Color.FromArgb(74, 49, 110),
+                _ => Color.FromArgb(27, 62, 96),
+            };
+
+            status.Text = mode switch
+            {
+                ControllerOutputMode.WebSafe =>
+                    "WEB SAFE ACTIVE  •  No virtual gamepad  •  Wheel=A/D  Throttle=W  Brake/Reverse=S  Handbrake=Space",
+                ControllerOutputMode.WebGamepad =>
+                    $"WEB GAMEPAD ACTIVE  •  Analog DS4  •  Wheel=LX  Throttle=R2  Brake=L2  •  {output.Status}",
+                _ => $"XBOX MODE ACTIVE  •  {output.Status}",
+            };
+
+            webButton.Enabled = mode != ControllerOutputMode.WebSafe;
+            webGamepadButton.Enabled = mode != ControllerOutputMode.WebGamepad;
+            xboxButton.Enabled = mode != ControllerOutputMode.Xbox360;
+            testButton.Enabled = mode != ControllerOutputMode.WebSafe;
+        }
+
+        bool TrySwitch(ControllerOutputMode mode, string label)
+        {
+            if (output.TrySetMode(mode, out var error))
+            {
+                RefreshBanner();
+                return true;
+            }
+
+            MessageBox.Show(
+                $"Could not create {label}.\n\n" +
+                "Switch back to WEB SAFE if you need to guarantee that no virtual controller is exposed.\n\n" +
+                $"Driver/API error: {error}",
+                "Output mode unavailable",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            RefreshBanner();
+            return false;
         }
 
         webButton.Click += (_, _) =>
@@ -130,25 +167,17 @@ internal static class Program
             RefreshBanner();
         };
 
+        webGamepadButton.Click += (_, _) =>
+            TrySwitch(ControllerOutputMode.WebGamepad, "the browser DualShock 4 controller");
+
         xboxButton.Click += (_, _) =>
-        {
-            if (!output.TrySetMode(ControllerOutputMode.Xbox360, out var error))
-            {
-                MessageBox.Show(
-                    "Could not create the virtual Xbox 360 controller.\n\n" +
-                    "WEB SAFE remains active, so the mouse-pointer problem stays blocked.\n\n" +
-                    $"Driver/API error: {error}",
-                    "Xbox output unavailable",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-            }
-            RefreshBanner();
-        };
+            TrySwitch(ControllerOutputMode.Xbox360, "the virtual Xbox 360 controller");
 
         output.ModeChanged += (_, _) => RefreshBanner();
 
         banner.Controls.Add(status);
         banner.Controls.Add(webButton);
+        banner.Controls.Add(webGamepadButton);
         banner.Controls.Add(xboxButton);
         banner.Controls.Add(testButton);
         banner.Controls.Add(installButton);
