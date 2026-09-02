@@ -123,7 +123,7 @@ internal static class Program
             status.Text = mode switch
             {
                 ControllerOutputMode.WebSafe =>
-                    "WEB SAFE ACTIVE  •  No virtual gamepad  •  Wheel=A/D  Throttle=W  Brake/Reverse=S  Handbrake=Space",
+                    "WEB SAFE ACTIVE  •  No virtual gamepad  •  Wheel=A/D + Left/Right  Throttle=W + Up  Brake=S + Down  Handbrake=Space",
                 ControllerOutputMode.WebGamepad =>
                     $"WEB GAMEPAD ACTIVE  •  Analog DS4  •  Wheel=LX  Throttle=R2  Brake=L2  •  {output.Status}",
                 _ => $"XBOX MODE ACTIVE  •  {output.Status}",
