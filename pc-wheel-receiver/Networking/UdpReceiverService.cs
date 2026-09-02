@@ -9,8 +9,11 @@ namespace PCWheelReceiver.Networking;
 
 public sealed class UdpReceiverService : IDisposable
 {
+    private const int FeedbackPacketSize = 8;
+
     private readonly ProtocolConfig _config;
     private readonly IControllerOutput _output;
+    private readonly IGameFeedbackSource? _feedbackSource;
     private readonly DynamicPacketParser _parser;
     private readonly object _sync = new();
     private readonly Stopwatch _rateWindow = Stopwatch.StartNew();
@@ -37,6 +40,11 @@ public sealed class UdpReceiverService : IDisposable
         _config = config;
         _output = output;
         _parser = new DynamicPacketParser(config);
+        _feedbackSource = output as IGameFeedbackSource;
+        if (_feedbackSource is not null)
+        {
+            _feedbackSource.GameFeedbackReceived += OnGameFeedbackReceived;
+        }
     }
 
     public event EventHandler<ReceiverSnapshot>? SnapshotUpdated;
@@ -59,6 +67,47 @@ public sealed class UdpReceiverService : IDisposable
         lock (_sync)
         {
             return BuildSnapshot();
+        }
+    }
+
+    private void OnGameFeedbackReceived(byte largeMotor, byte smallMotor)
+    {
+        UdpClient? udp;
+        IPEndPoint? remote;
+        lock (_sync)
+        {
+            udp = _udp;
+            remote = _remote;
+        }
+
+        if (_disposed || udp is null || remote is null) return;
+
+        // Separate 8-byte PCFB packet. Existing 36-byte controller packets and 12-byte RTT
+        // echoes remain byte-for-byte compatible with older Android/receiver versions.
+        var packet = new byte[FeedbackPacketSize]
+        {
+            (byte)'P', (byte)'C', (byte)'F', (byte)'B',
+            1,
+            largeMotor,
+            smallMotor,
+            0,
+        };
+        _ = SendFeedbackAsync(udp, remote, packet);
+    }
+
+    private static async Task SendFeedbackAsync(UdpClient udp, IPEndPoint remote, byte[] packet)
+    {
+        try
+        {
+            await udp.SendAsync(packet, packet.Length, remote).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Receiver is shutting down.
+        }
+        catch (SocketException)
+        {
+            // Rumble is best-effort and must never stall or fail the steering hot path.
         }
     }
 
@@ -105,6 +154,13 @@ public sealed class UdpReceiverService : IDisposable
                         PublishLocked(force: true);
                     }
                     continue;
+                }
+
+                // Keep the latest phone endpoint available to the ViGEm feedback callback before
+                // applying output, so a game rumble arriving immediately can be relayed back.
+                lock (_sync)
+                {
+                    _remote = result.RemoteEndPoint;
                 }
 
                 // Real-time control gets first priority. Previously the receive loop awaited
@@ -230,6 +286,10 @@ public sealed class UdpReceiverService : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        if (_feedbackSource is not null)
+        {
+            _feedbackSource.GameFeedbackReceived -= OnGameFeedbackReceived;
+        }
         _cts?.Cancel();
         _udp?.Dispose();
         try
