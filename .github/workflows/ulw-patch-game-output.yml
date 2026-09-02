@@ -1,0 +1,168 @@
+name: ULW game output patch
+
+on:
+  push:
+    branches:
+      - ulw/game-output-health-latency-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ulw/game-output-health-latency-20260902
+          fetch-depth: 0
+      - name: Apply exact receiver patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          program = Path('pc-wheel-receiver/Program.cs')
+          text = program.read_text()
+          if not text.startswith('using System.Diagnostics;'):
+              text = 'using System.Diagnostics;\n' + text
+
+          old = '''                var form = new MainForm(configPath, config, receiver, output);\n                EnableReliableVerticalScrolling(form);\n                Application.Run(form);'''
+          new = '''                var form = new MainForm(configPath, config, receiver, output);\n                EnableReliableVerticalScrolling(form);\n                AddGameOutputHealthUi(form, output);\n                Application.Run(form);'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('Program form startup block not found')
+
+          marker = '    private static void EnableReliableVerticalScrolling(Form form)\n'
+          helper = r'''    private static void AddGameOutputHealthUi(Form form, IControllerOutput output)
+    {
+        var ready = output.IsConnected;
+        var banner = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Padding = new Padding(14, 10, 14, 10),
+            BackColor = ready ? Color.FromArgb(18, 72, 45) : Color.FromArgb(105, 48, 20),
+        };
+
+        banner.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = ready
+                ? "GAME OUTPUT READY  •  Virtual Xbox 360 controller connected"
+                : "GAME OUTPUT OFF  •  Phone input can move here, but games receive NOTHING until the Xbox virtual driver works",
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI Semibold", 10.5f),
+            Margin = new Padding(0, 7, 12, 0),
+        });
+
+        var testButton = new Button
+        {
+            Text = "Test in Windows (joy.cpl)",
+            AutoSize = true,
+            Padding = new Padding(8, 3, 8, 3),
+        };
+        testButton.Click += (_, _) => Process.Start(new ProcessStartInfo
+        {
+            FileName = "joy.cpl",
+            UseShellExecute = true,
+        });
+        banner.Controls.Add(testButton);
+
+        if (!ready)
+        {
+            var installButton = new Button
+            {
+                Text = "Install ViGEmBus",
+                AutoSize = true,
+                Padding = new Padding(8, 3, 8, 3),
+            };
+            installButton.Click += (_, _) => InstallVigemBus();
+            banner.Controls.Add(installButton);
+
+            form.Shown += (_, _) => MessageBox.Show(
+                "Phone/UDP input may look completely normal even when game output is unavailable.\n\n" +
+                "PC Wheel could not create the virtual Xbox 360 controller. Install ViGEmBus, restart PC Wheel Receiver, then open joy.cpl and verify that an Xbox 360 Controller appears and moves before starting the game.",
+                "Game output is not active",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        form.Controls.Add(banner);
+        banner.BringToFront();
+    }
+
+    private static void InstallVigemBus()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"winget install --id ViGEm.ViGEmBus --exact --version 1.22.0 --accept-package-agreements --accept-source-agreements\"",
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Could not start the ViGEmBus installer: {ex.Message}",
+                "Driver installation failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+'''
+          if 'private static void AddGameOutputHealthUi' not in text:
+              if marker not in text:
+                  raise SystemExit('Program helper insertion marker not found')
+              text = text.replace(marker, helper + marker, 1)
+          program.write_text(text)
+
+          main = Path('pc-wheel-receiver/UI/MainForm.cs')
+          text = main.read_text()
+          replacements = {
+              'var ultra = NewButton("Ultra Responsive");': 'var ultra = NewButton("Fast + Precise");',
+              'output.SteeringSensitivity = 1.20f;': 'output.SteeringSensitivity = 1.08f;',
+              'output.SteeringDeadzone = 0.005f;': 'output.SteeringDeadzone = 0.002f;',
+              'output.SteeringCurve = 0.90f;': 'output.SteeringCurve = 0.96f;',
+              'output.SteeringPredictionMs = 18f;': 'output.SteeringPredictionMs = 6f;',
+              'output.SteeringPredictionMaxBoost = 0.12f;\n        output.PedalDeadzone = 0.005f;': 'output.SteeringPredictionMaxBoost = 0.04f;\n        output.PedalDeadzone = 0.002f;',
+              'Ultra Responsive uses a conservative 18 ms / 0.12 limit.': 'Fast + Precise uses a small 6 ms / 0.04 lead cap to reduce perceived delay without large overshoot.',
+          }
+          for old_text, new_text in replacements.items():
+              if old_text in text:
+                  text = text.replace(old_text, new_text, 1)
+              elif new_text not in text:
+                  raise SystemExit(f'MainForm expected text not found: {old_text}')
+          main.write_text(text)
+
+          protocol = Path('pc-wheel-receiver/protocol.json')
+          data = json.loads(protocol.read_text())
+          output = data['output']
+          output['steeringSensitivity'] = 1.0
+          output['steeringDeadzone'] = 0.0
+          output['steeringCurve'] = 1.0
+          output['steeringSmoothing'] = 0.0
+          output['steeringPredictionMs'] = 0.0
+          output['pedalDeadzone'] = 0.0
+          output['outputRateCapHz'] = 0
+          protocol.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          if git diff --quiet; then
+            echo 'Patch already applied.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pc-wheel-receiver/Program.cs pc-wheel-receiver/UI/MainForm.cs pc-wheel-receiver/protocol.json
+          git commit -m 'fix(pc-wheel): surface game output health and sharpen low-latency defaults'
+          git push origin HEAD:ulw/game-output-health-latency-20260902
