@@ -6,12 +6,14 @@ namespace PCWheelReceiver.Output;
 public enum ControllerOutputMode
 {
     WebSafe,
+    WebGamepad,
     Xbox360,
 }
 
 /// <summary>
-/// Owns exactly one active output at a time. In WebSafe mode no ViGEm/Xbox target exists,
-/// which prevents desktop controller mappings from turning wheel angle into mouse motion.
+/// Owns exactly one active output at a time. WebSafe has no virtual gamepad at all;
+/// WebGamepad exposes a virtual DualShock 4 for browser analog input; Xbox360 keeps
+/// the native XInput + rumble path for desktop games.
 /// </summary>
 public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbackSource
 {
@@ -44,7 +46,12 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
         {
             lock (_sync)
             {
-                var prefix = Mode == ControllerOutputMode.WebSafe ? "WEB SAFE" : "XBOX";
+                var prefix = Mode switch
+                {
+                    ControllerOutputMode.WebSafe => "WEB SAFE",
+                    ControllerOutputMode.WebGamepad => "WEB GAMEPAD",
+                    _ => "XBOX",
+                };
                 return $"{prefix}: {_active.Status}";
             }
         }
@@ -89,13 +96,13 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
             Mode = mode;
         }
 
-        // Dispose outside the lock. Xbox disposal can enter the driver stack and we do not
-        // want controller packet processing blocked behind that work.
+        // Dispose outside the lock. Virtual-device teardown can enter the driver stack and
+        // must not block packet processing behind the output lock.
         previous.Dispose();
 
-        // When leaving Xbox mode, explicitly clear any cached rumble in the relay before
-        // the feedback source disappears. Android's stale watchdog remains a backup.
-        if (previousMode == ControllerOutputMode.Xbox360 && mode != ControllerOutputMode.Xbox360)
+        // When leaving any rumble-capable virtual gamepad, explicitly clear cached rumble.
+        // Android's stale watchdog remains a backup if the stop packet is lost.
+        if (previousMode is ControllerOutputMode.Xbox360 or ControllerOutputMode.WebGamepad)
             GameFeedbackReceived?.Invoke(0, 0);
 
         ModeChanged?.Invoke(this, EventArgs.Empty);
@@ -114,6 +121,7 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
     private IControllerOutput CreateOutput(ControllerOutputMode mode) => mode switch
     {
         ControllerOutputMode.WebSafe => new WebKeyboardOutput(_config),
+        ControllerOutputMode.WebGamepad => new DualShock4Output(_config),
         ControllerOutputMode.Xbox360 => new Xbox360Output(_config),
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
     };
@@ -147,7 +155,7 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
         }
 
         active.Dispose();
-        if (mode == ControllerOutputMode.Xbox360)
+        if (mode is ControllerOutputMode.Xbox360 or ControllerOutputMode.WebGamepad)
             GameFeedbackReceived?.Invoke(0, 0);
     }
 }
