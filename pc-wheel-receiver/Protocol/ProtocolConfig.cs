@@ -1,0 +1,91 @@
+using System.Text.Json;
+
+namespace PCWheelReceiver.Protocol;
+
+public sealed class ProtocolConfig
+{
+    public int ListenPort { get; set; } = 26760;
+    public int ControllerPacketSize { get; set; } = 36;
+    public int PingPacketSize { get; set; } = 12;
+    public bool EchoPingPackets { get; set; } = true;
+    public string Endianness { get; set; } = "little";
+    public string AutoPreferredEndianness { get; set; } = "little";
+    public FieldLayout Fields { get; set; } = new();
+    public OutputConfig Output { get; set; } = new();
+
+    public static ProtocolConfig Load(string path)
+    {
+        if (!File.Exists(path))
+        {
+            var defaults = new ProtocolConfig();
+            try
+            {
+                defaults.Save(path);
+            }
+            catch
+            {
+                // A standalone executable can still run with in-memory defaults even
+                // if its current directory is read-only.
+            }
+            return defaults;
+        }
+
+        var json = File.ReadAllText(path);
+        var config = JsonSerializer.Deserialize<ProtocolConfig>(json, JsonOptions());
+        return config ?? throw new InvalidDataException("protocol.json could not be parsed.");
+    }
+
+    public void Save(string path)
+    {
+        File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions(writeIndented: true)));
+    }
+
+    private static JsonSerializerOptions JsonOptions(bool writeIndented = false) => new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+        WriteIndented = writeIndented,
+    };
+}
+
+public sealed class FieldLayout
+{
+    public FieldSpec Sequence { get; set; } = new() { Offset = 0, Type = "uint32" };
+    public FieldSpec Timestamp { get; set; } = new() { Offset = 4, Type = "int64" };
+    public FieldSpec Steering { get; set; } = new() { Offset = 12, Type = "float32" };
+    public FieldSpec Throttle { get; set; } = new() { Offset = 16, Type = "float32" };
+    public FieldSpec Brake { get; set; } = new() { Offset = 20, Type = "float32" };
+    public FieldSpec Clutch { get; set; } = new() { Offset = 24, Type = "float32" };
+    public FieldSpec Handbrake { get; set; } = new() { Offset = 28, Type = "float32" };
+    public FieldSpec Buttons { get; set; } = new() { Offset = 32, Type = "uint32" };
+}
+
+public sealed class FieldSpec
+{
+    public int Offset { get; set; }
+    public string Type { get; set; } = "float32";
+}
+
+public sealed class OutputConfig
+{
+    public int ShiftUpBit { get; set; } = 0;
+    public int ShiftDownBit { get; set; } = 1;
+    public int HornBit { get; set; } = 2;
+    public int CameraBit { get; set; } = 3;
+    public int ResetBit { get; set; } = 4;
+    public float HandbrakeButtonThreshold { get; set; } = 0.5f;
+    public bool MapClutchToRightStickY { get; set; } = true;
+
+    // Receiver-side tuning. These transform only virtual-controller output;
+    // the Android UDP protocol remains unchanged.
+    public bool InvertSteering { get; set; } = false;
+    public float SteeringSensitivity { get; set; } = 1.0f;
+    public float SteeringDeadzone { get; set; } = 0.015f;
+    public float SteeringCurve { get; set; } = 1.0f;
+    public float SteeringSmoothing { get; set; } = 0.0f;
+    public float SteeringPredictionMs { get; set; } = 0.0f;
+    public float SteeringPredictionMaxBoost { get; set; } = 0.12f;
+    public float PedalDeadzone { get; set; } = 0.01f;
+    public int OutputRateCapHz { get; set; } = 0;
+}

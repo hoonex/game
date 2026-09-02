@@ -1,0 +1,79 @@
+name: PC Wheel Receiver
+
+on:
+  push:
+    branches:
+      - feat/pc-wheel-receiver
+    paths:
+      - "pc-wheel-receiver/**"
+      - ".github/workflows/pc-wheel-receiver.yml"
+  pull_request:
+    paths:
+      - "pc-wheel-receiver/**"
+      - ".github/workflows/pc-wheel-receiver.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: pc-wheel-receiver
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Publish win-x64 folder
+        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o publish/win-x64
+
+      - name: Create release ZIP
+        shell: pwsh
+        run: Compress-Archive -Path publish/win-x64/* -DestinationPath publish/PCWheelReceiver-win-x64.zip -Force
+
+      - name: Publish standalone win-x64 EXE
+        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o publish/standalone
+
+      - name: Prepare standalone asset
+        shell: pwsh
+        run: Copy-Item publish/standalone/PCWheelReceiver.exe publish/PCWheelReceiver-standalone-win-x64.exe -Force
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCWheelReceiver-win-x64
+          path: |
+            pc-wheel-receiver/publish/win-x64/
+            pc-wheel-receiver/publish/PCWheelReceiver-win-x64.zip
+            pc-wheel-receiver/publish/PCWheelReceiver-standalone-win-x64.exe
+
+      - name: Publish direct-download GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/feat/pc-wheel-receiver'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "pc-wheel-v0.1.0"
+          $zip = "publish/PCWheelReceiver-win-x64.zip"
+          $exe = "publish/PCWheelReceiver-standalone-win-x64.exe"
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+          $notes = "Windows x64 receiver for PC Wheel. Includes live steering tuning, Ultra Responsive mode, and LAN receiver discovery on UDP 26761.`n`nSource commit: $env:GITHUB_SHA"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip $exe --repo $env:GITHUB_REPOSITORY --clobber
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "PC Wheel Receiver v0.1.0" --notes $notes
+          } else {
+            gh release create $tag $zip $exe --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "PC Wheel Receiver v0.1.0" --notes $notes
+          }
