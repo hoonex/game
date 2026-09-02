@@ -77,12 +77,12 @@ public sealed class UdpReceiverService : IDisposable
         lock (_sync)
         {
             udp = _udp;
-            remote = _remote;
+            remote = _remote is null ? null : new IPEndPoint(_remote.Address, 26762);
         }
 
         if (_disposed || udp is null || remote is null) return;
 
-        // Separate 8-byte PCFB packet. Existing 36-byte controller packets and 12-byte RTT
+        // Separate 8-byte PCFB packet to the Android feedback port 26762. Existing 36-byte controller packets and 12-byte RTT
         // echoes remain byte-for-byte compatible with older Android/receiver versions.
         var packet = new byte[FeedbackPacketSize]
         {
