@@ -131,7 +131,7 @@ public sealed class MainForm : Form
             AutoSize = true,
             MaximumSize = new Size(850, 0),
             ForeColor = Color.DarkGray,
-            Text = "Phone TX rate is measured from incoming UDP. Output rate cap only limits analog updates sent to the virtual Xbox controller. Prediction is a small velocity-based look-ahead applied after parsing; it never changes the Android 36-byte packet format. Very high prediction can overshoot, so Ultra Responsive uses a conservative 18 ms / 0.12 limit.",
+            Text = "Phone TX rate is measured from incoming UDP. Output rate cap only limits analog updates sent to the virtual Xbox controller. Prediction is a small velocity-based look-ahead applied after parsing; it never changes the Android 36-byte packet format. Very high prediction can overshoot, so Fast + Precise uses a small 6 ms / 0.04 lead cap to reduce perceived delay without large overshoot.",
             Margin = new Padding(0, 18, 0, 0),
         });
 
@@ -174,7 +174,7 @@ public sealed class MainForm : Form
             WrapContents = true,
             Margin = new Padding(3, 2, 3, 8),
         };
-        var ultra = NewButton("Ultra Responsive");
+        var ultra = NewButton("Fast + Precise");
         ultra.Click += (_, _) => ApplyUltraResponsivePreset();
         var balanced = NewButton("Balanced");
         balanced.Click += (_, _) => ApplyBalancedPreset();
@@ -274,13 +274,13 @@ public sealed class MainForm : Form
     private void ApplyUltraResponsivePreset()
     {
         var output = _config.Output;
-        output.SteeringSensitivity = 1.20f;
-        output.SteeringDeadzone = 0.005f;
-        output.SteeringCurve = 0.90f;
+        output.SteeringSensitivity = 1.08f;
+        output.SteeringDeadzone = 0.002f;
+        output.SteeringCurve = 0.96f;
         output.SteeringSmoothing = 0.00f;
-        output.SteeringPredictionMs = 18f;
-        output.SteeringPredictionMaxBoost = 0.12f;
-        output.PedalDeadzone = 0.005f;
+        output.SteeringPredictionMs = 6f;
+        output.SteeringPredictionMaxBoost = 0.04f;
+        output.PedalDeadzone = 0.002f;
         output.OutputRateCapHz = 0;
         LoadTuningControlsFromConfig();
     }
