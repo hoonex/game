@@ -6,14 +6,38 @@
   "endianness": "little",
   "autoPreferredEndianness": "little",
   "fields": {
-    "sequence": { "offset": 0, "type": "uint32" },
-    "timestamp": { "offset": 4, "type": "int64" },
-    "steering": { "offset": 12, "type": "float32" },
-    "throttle": { "offset": 16, "type": "float32" },
-    "brake": { "offset": 20, "type": "float32" },
-    "clutch": { "offset": 24, "type": "float32" },
-    "handbrake": { "offset": 28, "type": "float32" },
-    "buttons": { "offset": 32, "type": "uint32" }
+    "sequence": {
+      "offset": 0,
+      "type": "uint32"
+    },
+    "timestamp": {
+      "offset": 4,
+      "type": "int64"
+    },
+    "steering": {
+      "offset": 12,
+      "type": "float32"
+    },
+    "throttle": {
+      "offset": 16,
+      "type": "float32"
+    },
+    "brake": {
+      "offset": 20,
+      "type": "float32"
+    },
+    "clutch": {
+      "offset": 24,
+      "type": "float32"
+    },
+    "handbrake": {
+      "offset": 28,
+      "type": "float32"
+    },
+    "buttons": {
+      "offset": 32,
+      "type": "uint32"
+    }
   },
   "output": {
     "shiftUpBit": 0,
@@ -25,12 +49,12 @@
     "mapClutchToRightStickY": true,
     "invertSteering": false,
     "steeringSensitivity": 1.0,
-    "steeringDeadzone": 0.015,
+    "steeringDeadzone": 0.0,
     "steeringCurve": 1.0,
     "steeringSmoothing": 0.0,
     "steeringPredictionMs": 0.0,
     "steeringPredictionMaxBoost": 0.12,
-    "pedalDeadzone": 0.01,
+    "pedalDeadzone": 0.0,
     "outputRateCapHz": 0
   }
 }

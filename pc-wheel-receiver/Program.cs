@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PCWheelReceiver.Networking;
 using PCWheelReceiver.Output;
 using PCWheelReceiver.Protocol;
@@ -45,6 +46,7 @@ internal static class Program
 
                 var form = new MainForm(configPath, config, receiver, output);
                 EnableReliableVerticalScrolling(form);
+                AddGameOutputHealthUi(form, output);
                 Application.Run(form);
             }
         }
@@ -53,6 +55,88 @@ internal static class Program
             MessageBox.Show(
                 ex.ToString(),
                 "PC Wheel Receiver failed to start",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private static void AddGameOutputHealthUi(Form form, IControllerOutput output)
+    {
+        var ready = output.IsConnected;
+        var banner = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Padding = new Padding(14, 10, 14, 10),
+            BackColor = ready ? Color.FromArgb(18, 72, 45) : Color.FromArgb(105, 48, 20),
+        };
+
+        banner.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = ready
+                ? "GAME OUTPUT READY  •  Virtual Xbox 360 controller connected"
+                : "GAME OUTPUT OFF  •  Phone input can move here, but games receive NOTHING until the Xbox virtual driver works",
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI Semibold", 10.5f),
+            Margin = new Padding(0, 7, 12, 0),
+        });
+
+        var testButton = new Button
+        {
+            Text = "Test in Windows (joy.cpl)",
+            AutoSize = true,
+            Padding = new Padding(8, 3, 8, 3),
+        };
+        testButton.Click += (_, _) => Process.Start(new ProcessStartInfo
+        {
+            FileName = "joy.cpl",
+            UseShellExecute = true,
+        });
+        banner.Controls.Add(testButton);
+
+        if (!ready)
+        {
+            var installButton = new Button
+            {
+                Text = "Install ViGEmBus",
+                AutoSize = true,
+                Padding = new Padding(8, 3, 8, 3),
+            };
+            installButton.Click += (_, _) => InstallVigemBus();
+            banner.Controls.Add(installButton);
+
+            form.Shown += (_, _) => MessageBox.Show(
+                "Phone/UDP input may look completely normal even when game output is unavailable.\n\n" +
+                "PC Wheel could not create the virtual Xbox 360 controller. Install ViGEmBus, restart PC Wheel Receiver, then open joy.cpl and verify that an Xbox 360 Controller appears and moves before starting the game.",
+                "Game output is not active",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        form.Controls.Add(banner);
+        banner.BringToFront();
+    }
+
+    private static void InstallVigemBus()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"winget install --id ViGEm.ViGEmBus --exact --version 1.22.0 --accept-package-agreements --accept-source-agreements\"",
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Could not start the ViGEmBus installer: {ex.Message}",
+                "Driver installation failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
