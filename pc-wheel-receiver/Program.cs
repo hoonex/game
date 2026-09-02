@@ -18,37 +18,27 @@ internal static class Program
             var configPath = Path.Combine(AppContext.BaseDirectory, "protocol.json");
             var config = ProtocolConfig.Load(configPath);
 
-            IControllerOutput output;
+            // Start in WEB SAFE mode. No virtual Xbox device exists until the user
+            // explicitly enables Xbox mode, so desktop gamepad-to-mouse mappings cannot
+            // move the pointer while using browser games.
+            using var output = new SwitchableControllerOutput(config.Output);
+            using var receiver = new UdpReceiverService(config, output);
+            using var discovery = new DiscoveryService(config.ListenPort);
+
             try
             {
-                output = new Xbox360Output(config.Output);
+                discovery.Start();
             }
-            catch (Exception ex)
+            catch
             {
-                output = new DiagnosticOutput(
-                    "Virtual Xbox output unavailable. Install ViGEmBus, then restart. " +
-                    $"Driver/API error: {ex.Message}");
+                // Discovery is optional. Manual IP connection and the 26760 controller path
+                // must remain available even if UDP 26761 is unavailable or blocked.
             }
 
-            using (output)
-            using (var receiver = new UdpReceiverService(config, output))
-            using (var discovery = new DiscoveryService(config.ListenPort))
-            {
-                try
-                {
-                    discovery.Start();
-                }
-                catch
-                {
-                    // Discovery is optional. Manual IP connection and the 26760 controller path
-                    // must remain available even if UDP 26761 is unavailable or blocked.
-                }
-
-                var form = new MainForm(configPath, config, receiver, output);
-                EnableReliableVerticalScrolling(form);
-                AddGameOutputHealthUi(form, output);
-                Application.Run(form);
-            }
+            var form = new MainForm(configPath, config, receiver, output);
+            EnableReliableVerticalScrolling(form);
+            AddGameOutputHealthUi(form, output);
+            Application.Run(form);
         }
         catch (Exception ex)
         {
@@ -60,9 +50,8 @@ internal static class Program
         }
     }
 
-    private static void AddGameOutputHealthUi(Form form, IControllerOutput output)
+    private static void AddGameOutputHealthUi(Form form, SwitchableControllerOutput output)
     {
-        var ready = output.IsConnected;
         var banner = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -70,23 +59,33 @@ internal static class Program
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = true,
             Padding = new Padding(14, 10, 14, 10),
-            BackColor = ready ? Color.FromArgb(18, 72, 45) : Color.FromArgb(105, 48, 20),
         };
 
-        banner.Controls.Add(new Label
+        var status = new Label
         {
             AutoSize = true,
-            Text = ready
-                ? "GAME OUTPUT READY  •  Virtual Xbox 360 controller connected"
-                : "GAME OUTPUT OFF  •  Phone input can move here, but games receive NOTHING until the Xbox virtual driver works",
             ForeColor = Color.White,
             Font = new Font("Segoe UI Semibold", 10.5f),
             Margin = new Padding(0, 7, 12, 0),
-        });
+        };
+
+        var webButton = new Button
+        {
+            Text = "WEB SAFE",
+            AutoSize = true,
+            Padding = new Padding(8, 3, 8, 3),
+        };
+
+        var xboxButton = new Button
+        {
+            Text = "XBOX + RUMBLE",
+            AutoSize = true,
+            Padding = new Padding(8, 3, 8, 3),
+        };
 
         var testButton = new Button
         {
-            Text = "Test in Windows (joy.cpl)",
+            Text = "Test Xbox (joy.cpl)",
             AutoSize = true,
             Padding = new Padding(8, 3, 8, 3),
         };
@@ -95,26 +94,65 @@ internal static class Program
             FileName = "joy.cpl",
             UseShellExecute = true,
         });
-        banner.Controls.Add(testButton);
 
-        if (!ready)
+        var installButton = new Button
         {
-            var installButton = new Button
-            {
-                Text = "Install ViGEmBus",
-                AutoSize = true,
-                Padding = new Padding(8, 3, 8, 3),
-            };
-            installButton.Click += (_, _) => InstallVigemBus();
-            banner.Controls.Add(installButton);
+            Text = "Install ViGEmBus",
+            AutoSize = true,
+            Padding = new Padding(8, 3, 8, 3),
+        };
+        installButton.Click += (_, _) => InstallVigemBus();
 
-            form.Shown += (_, _) => MessageBox.Show(
-                "Phone/UDP input may look completely normal even when game output is unavailable.\n\n" +
-                "PC Wheel could not create the virtual Xbox 360 controller. Install ViGEmBus, restart PC Wheel Receiver, then open joy.cpl and verify that an Xbox 360 Controller appears and moves before starting the game.",
-                "Game output is not active",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+        void RefreshBanner()
+        {
+            var webSafe = output.Mode == ControllerOutputMode.WebSafe;
+            banner.BackColor = webSafe
+                ? Color.FromArgb(18, 72, 45)
+                : Color.FromArgb(27, 62, 96);
+            status.Text = webSafe
+                ? "WEB SAFE ACTIVE  •  Xbox device disconnected  •  Wheel=A/D  Throttle=W  Brake/Reverse=S  Handbrake=Space"
+                : $"XBOX MODE ACTIVE  •  {output.Status}";
+            webButton.Enabled = !webSafe;
+            xboxButton.Enabled = webSafe;
+            testButton.Enabled = !webSafe;
         }
+
+        webButton.Click += (_, _) =>
+        {
+            if (!output.TrySetMode(ControllerOutputMode.WebSafe, out var error))
+            {
+                MessageBox.Show(
+                    error ?? "Could not switch to WEB SAFE mode.",
+                    "Output mode change failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            RefreshBanner();
+        };
+
+        xboxButton.Click += (_, _) =>
+        {
+            if (!output.TrySetMode(ControllerOutputMode.Xbox360, out var error))
+            {
+                MessageBox.Show(
+                    "Could not create the virtual Xbox 360 controller.\n\n" +
+                    "WEB SAFE remains active, so the mouse-pointer problem stays blocked.\n\n" +
+                    $"Driver/API error: {error}",
+                    "Xbox output unavailable",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            RefreshBanner();
+        };
+
+        output.ModeChanged += (_, _) => RefreshBanner();
+
+        banner.Controls.Add(status);
+        banner.Controls.Add(webButton);
+        banner.Controls.Add(xboxButton);
+        banner.Controls.Add(testButton);
+        banner.Controls.Add(installButton);
+        RefreshBanner();
 
         form.Controls.Add(banner);
         banner.BringToFront();
