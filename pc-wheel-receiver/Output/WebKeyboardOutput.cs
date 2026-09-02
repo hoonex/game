@@ -5,27 +5,16 @@ using PCWheelReceiver.Protocol;
 namespace PCWheelReceiver.Output;
 
 /// <summary>
-/// Browser-safe fallback output. It deliberately does not create any virtual gamepad,
-/// so Steam Desktop Layout / controller-to-mouse mappers have nothing to intercept.
-/// Steering is mapped to A/D, throttle/brake to W/S, and handbrake to Space.
+/// Browser-safe keyboard fallback. It deliberately does not create a virtual gamepad,
+/// so desktop controller-to-mouse mappings have nothing to intercept. For broad browser
+/// racing compatibility it emits both WASD and arrow-key scan codes for driving input.
 /// </summary>
 public sealed class WebKeyboardOutput : IControllerOutput
 {
-    private const ushort VkA = 0x41;
-    private const ushort VkD = 0x44;
-    private const ushort VkW = 0x57;
-    private const ushort VkS = 0x53;
-    private const ushort VkSpace = 0x20;
-    private const ushort VkQ = 0x51;
-    private const ushort VkE = 0x45;
-    private const ushort VkH = 0x48;
-    private const ushort VkC = 0x43;
-    private const ushort VkR = 0x52;
-
     private readonly OutputConfig _config;
-    private readonly HashSet<ushort> _down = new();
+    private readonly HashSet<int> _down = new();
     private bool _disposed;
-    private string _status = "WEB SAFE keyboard output active (virtual Xbox disconnected)";
+    private string _status = "WEB SAFE keyboard output active (WASD + arrows, virtual gamepad disconnected)";
 
     public WebKeyboardOutput(OutputConfig config)
     {
@@ -43,36 +32,47 @@ public sealed class WebKeyboardOutput : IControllerOutput
         if (_config.InvertSteering) steering = -steering;
         steering *= Math.Clamp(_config.SteeringSensitivity, 0.1f, 3f);
 
-        // A small minimum threshold avoids key chatter around wheel center while still
-        // respecting a larger user-configured deadzone.
         var steeringThreshold = Math.Max(0.04f, Math.Clamp(_config.SteeringDeadzone, 0f, 0.5f));
         var pedalThreshold = Math.Max(0.02f, Math.Clamp(_config.PedalDeadzone, 0f, 0.5f));
 
-        SetKey(VkA, steering < -steeringThreshold);
-        SetKey(VkD, steering > steeringThreshold);
-        SetKey(VkW, state.Throttle > pedalThreshold);
-        SetKey(VkS, state.Brake > pedalThreshold);
-        SetKey(VkSpace, state.Handbrake >= Math.Clamp(_config.HandbrakeButtonThreshold, 0f, 1f));
+        var left = steering < -steeringThreshold;
+        var right = steering > steeringThreshold;
+        var throttle = state.Throttle > pedalThreshold;
+        var brake = state.Brake > pedalThreshold;
 
-        // Keep the phone's existing button semantics useful in browser games.
-        SetKey(VkE, IsBitSet(state.Buttons, _config.ShiftUpBit));
-        SetKey(VkQ, IsBitSet(state.Buttons, _config.ShiftDownBit));
-        SetKey(VkH, IsBitSet(state.Buttons, _config.HornBit));
-        SetKey(VkC, IsBitSet(state.Buttons, _config.CameraBit));
-        SetKey(VkR, IsBitSet(state.Buttons, _config.ResetBit));
+        // Emit both common browser-racing layouts. Using scan codes makes these look like
+        // physical key transitions to applications that care about hardware positions.
+        SetScanKey(ScanA, extended: false, left);
+        SetScanKey(ScanLeft, extended: true, left);
+        SetScanKey(ScanD, extended: false, right);
+        SetScanKey(ScanRight, extended: true, right);
+        SetScanKey(ScanW, extended: false, throttle);
+        SetScanKey(ScanUp, extended: true, throttle);
+        SetScanKey(ScanS, extended: false, brake);
+        SetScanKey(ScanDown, extended: true, brake);
+
+        SetScanKey(ScanSpace, extended: false,
+            state.Handbrake >= Math.Clamp(_config.HandbrakeButtonThreshold, 0f, 1f));
+
+        SetScanKey(ScanE, extended: false, IsBitSet(state.Buttons, _config.ShiftUpBit));
+        SetScanKey(ScanQ, extended: false, IsBitSet(state.Buttons, _config.ShiftDownBit));
+        SetScanKey(ScanH, extended: false, IsBitSet(state.Buttons, _config.HornBit));
+        SetScanKey(ScanC, extended: false, IsBitSet(state.Buttons, _config.CameraBit));
+        SetScanKey(ScanR, extended: false, IsBitSet(state.Buttons, _config.ResetBit));
     }
 
-    private void SetKey(ushort virtualKey, bool shouldBeDown)
+    private void SetScanKey(ushort scanCode, bool extended, bool shouldBeDown)
     {
-        var isDown = _down.Contains(virtualKey);
+        var id = scanCode | (extended ? 0x10000 : 0);
+        var isDown = _down.Contains(id);
         if (isDown == shouldBeDown) return;
 
-        if (SendKey(virtualKey, keyUp: !shouldBeDown))
+        if (SendScanKey(scanCode, extended, keyUp: !shouldBeDown))
         {
             if (shouldBeDown)
-                _down.Add(virtualKey);
+                _down.Add(id);
             else
-                _down.Remove(virtualKey);
+                _down.Remove(id);
         }
         else
         {
@@ -80,8 +80,12 @@ public sealed class WebKeyboardOutput : IControllerOutput
         }
     }
 
-    private static bool SendKey(ushort virtualKey, bool keyUp)
+    private static bool SendScanKey(ushort scanCode, bool extended, bool keyUp)
     {
+        var flags = KeyeventfScancode;
+        if (extended) flags |= KeyeventfExtendedkey;
+        if (keyUp) flags |= KeyeventfKeyup;
+
         var input = new INPUT
         {
             type = InputKeyboard,
@@ -89,9 +93,9 @@ public sealed class WebKeyboardOutput : IControllerOutput
             {
                 ki = new KEYBDINPUT
                 {
-                    wVk = virtualKey,
-                    wScan = 0,
-                    dwFlags = keyUp ? KeyeventfKeyup : 0,
+                    wVk = 0,
+                    wScan = scanCode,
+                    dwFlags = flags,
                     time = 0,
                     dwExtraInfo = UIntPtr.Zero,
                 },
@@ -106,9 +110,11 @@ public sealed class WebKeyboardOutput : IControllerOutput
 
     private void ReleaseAllKeys()
     {
-        foreach (var key in _down.ToArray())
+        foreach (var id in _down.ToArray())
         {
-            SendKey(key, keyUp: true);
+            var extended = (id & 0x10000) != 0;
+            var scanCode = (ushort)(id & 0xFFFF);
+            SendScanKey(scanCode, extended, keyUp: true);
         }
         _down.Clear();
     }
@@ -121,8 +127,26 @@ public sealed class WebKeyboardOutput : IControllerOutput
         _status = "Disconnected";
     }
 
+    // Set 1 keyboard scan codes used by Windows SendInput.
+    private const ushort ScanQ = 0x10;
+    private const ushort ScanW = 0x11;
+    private const ushort ScanE = 0x12;
+    private const ushort ScanR = 0x13;
+    private const ushort ScanA = 0x1E;
+    private const ushort ScanS = 0x1F;
+    private const ushort ScanD = 0x20;
+    private const ushort ScanH = 0x23;
+    private const ushort ScanC = 0x2E;
+    private const ushort ScanSpace = 0x39;
+    private const ushort ScanUp = 0x48;
+    private const ushort ScanLeft = 0x4B;
+    private const ushort ScanRight = 0x4D;
+    private const ushort ScanDown = 0x50;
+
     private const uint InputKeyboard = 1;
+    private const uint KeyeventfExtendedkey = 0x0001;
     private const uint KeyeventfKeyup = 0x0002;
+    private const uint KeyeventfScancode = 0x0008;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
