@@ -58,6 +58,7 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
         error = null;
         IControllerOutput? replacement = null;
         IControllerOutput? previous = null;
+        ControllerOutputMode previousMode;
 
         lock (_sync)
         {
@@ -82,6 +83,7 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
             }
 
             previous = _active;
+            previousMode = Mode;
             UnsubscribeFeedback(previous);
             _active = replacement;
             Mode = mode;
@@ -90,6 +92,12 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
         // Dispose outside the lock. Xbox disposal can enter the driver stack and we do not
         // want controller packet processing blocked behind that work.
         previous.Dispose();
+
+        // When leaving Xbox mode, explicitly clear any cached rumble in the relay before
+        // the feedback source disappears. Android's stale watchdog remains a backup.
+        if (previousMode == ControllerOutputMode.Xbox360 && mode != ControllerOutputMode.Xbox360)
+            GameFeedbackReceived?.Invoke(0, 0);
+
         ModeChanged?.Invoke(this, EventArgs.Empty);
         return true;
     }
@@ -128,14 +136,18 @@ public sealed class SwitchableControllerOutput : IControllerOutput, IGameFeedbac
     public void Dispose()
     {
         IControllerOutput active;
+        ControllerOutputMode mode;
         lock (_sync)
         {
             if (_disposed) return;
             _disposed = true;
             active = _active;
+            mode = Mode;
             UnsubscribeFeedback(active);
         }
 
         active.Dispose();
+        if (mode == ControllerOutputMode.Xbox360)
+            GameFeedbackReceived?.Invoke(0, 0);
     }
 }
