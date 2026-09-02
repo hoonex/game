@@ -9,8 +9,12 @@ namespace PCWheelReceiver.Networking;
 
 public sealed class UdpReceiverService : IDisposable
 {
+    private const int FeedbackPacketSize = 8;
+    private const int FeedbackPort = 26762;
+
     private readonly ProtocolConfig _config;
     private readonly IControllerOutput _output;
+    private readonly IGameFeedbackSource? _feedbackSource;
     private readonly DynamicPacketParser _parser;
     private readonly object _sync = new();
     private readonly Stopwatch _rateWindow = Stopwatch.StartNew();
@@ -37,6 +41,11 @@ public sealed class UdpReceiverService : IDisposable
         _config = config;
         _output = output;
         _parser = new DynamicPacketParser(config);
+        _feedbackSource = output as IGameFeedbackSource;
+        if (_feedbackSource is not null)
+        {
+            _feedbackSource.GameFeedbackReceived += OnGameFeedbackReceived;
+        }
     }
 
     public event EventHandler<ReceiverSnapshot>? SnapshotUpdated;
@@ -62,6 +71,47 @@ public sealed class UdpReceiverService : IDisposable
         }
     }
 
+    private void OnGameFeedbackReceived(byte largeMotor, byte smallMotor)
+    {
+        UdpClient? udp;
+        IPEndPoint? remote;
+        lock (_sync)
+        {
+            udp = _udp;
+            remote = _remote is null ? null : new IPEndPoint(_remote.Address, FeedbackPort);
+        }
+
+        if (_disposed || udp is null || remote is null) return;
+
+        // Separate 8-byte PCFB packet to Android feedback port 26762. Existing controller
+        // packets and RTT echoes stay byte-for-byte compatible with older builds.
+        var packet = new byte[FeedbackPacketSize]
+        {
+            (byte)'P', (byte)'C', (byte)'F', (byte)'B',
+            1,
+            largeMotor,
+            smallMotor,
+            0,
+        };
+        _ = SendFeedbackAsync(udp, remote, packet);
+    }
+
+    private static async Task SendFeedbackAsync(UdpClient udp, IPEndPoint remote, byte[] packet)
+    {
+        try
+        {
+            await udp.SendAsync(packet, packet.Length, remote).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Receiver is shutting down.
+        }
+        catch (SocketException)
+        {
+            // Rumble is best-effort and must never stall or fail the steering hot path.
+        }
+    }
+
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
     {
         try
@@ -78,7 +128,6 @@ public sealed class UdpReceiverService : IDisposable
                     break;
                 }
 
-                // Backward-compatible support for a standalone 12-byte ping datagram.
                 if (result.Buffer.Length == _config.PingPacketSize && _config.EchoPingPackets)
                 {
                     await _udp.SendAsync(result.Buffer, result.Buffer.Length, result.RemoteEndPoint);
@@ -107,9 +156,13 @@ public sealed class UdpReceiverService : IDisposable
                     continue;
                 }
 
-                // Real-time control gets first priority. Previously the receive loop awaited
-                // the RTT header echo before applying the controller state, which put telemetry
-                // work directly in front of the steering hot path.
+                // Keep the latest phone IP available before submitting the virtual controller report,
+                // so a game rumble notification can be relayed immediately on a separate UDP path.
+                lock (_sync)
+                {
+                    _remote = result.RemoteEndPoint;
+                }
+
                 string? outputError = null;
                 try
                 {
@@ -120,9 +173,6 @@ public sealed class UdpReceiverService : IDisposable
                     outputError = $"Virtual controller output failed: {ex.Message}";
                 }
 
-                // Echo the Android sequence + timestamp only after the virtual-controller update.
-                // RTT now includes the tiny receiver processing cost, while steering is no longer
-                // delayed by an awaited UDP send.
                 if (_config.EchoPingPackets && _config.PingPacketSize > 0 &&
                     _config.PingPacketSize <= result.Buffer.Length)
                 {
@@ -153,10 +203,6 @@ public sealed class UdpReceiverService : IDisposable
                     _lastPacketAt = DateTimeOffset.Now;
                     _lastError = outputError;
                     UpdateRate();
-
-                    // The WinForms UI renders at roughly 30 Hz. Publishing a new snapshot for
-                    // every ~100 Hz Android packet only creates extra allocations/event work and
-                    // slows the loop that should be receiving the next steering sample.
                     PublishLocked(force: outputError is not null);
                 }
             }
@@ -178,9 +224,6 @@ public sealed class UdpReceiverService : IDisposable
     {
         if (_lastSequence is uint previous)
         {
-            // The Android sequence is a signed Int, but the on-wire representation is exactly
-            // 32 bits. Treating it as uint here preserves modulo-2^32 progression across the
-            // Int.MAX_VALUE -> Int.MIN_VALUE wrap without a special case.
             var delta = unchecked(sequence - previous);
             if (delta > 1 && delta < 1_000_000)
             {
@@ -230,6 +273,10 @@ public sealed class UdpReceiverService : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        if (_feedbackSource is not null)
+        {
+            _feedbackSource.GameFeedbackReceived -= OnGameFeedbackReceived;
+        }
         _cts?.Cancel();
         _udp?.Dispose();
         try
@@ -238,7 +285,6 @@ public sealed class UdpReceiverService : IDisposable
         }
         catch
         {
-            // Shutdown path: socket cancellation exceptions are expected.
         }
         _cts?.Dispose();
     }
