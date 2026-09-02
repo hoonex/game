@@ -7,7 +7,7 @@ using PCWheelReceiver.Protocol;
 
 namespace PCWheelReceiver.Output;
 
-public sealed class Xbox360Output : IControllerOutput
+public sealed class Xbox360Output : IControllerOutput, IGameFeedbackSource
 {
     private readonly OutputConfig _config;
     private readonly ViGEmClient _client;
@@ -30,6 +30,7 @@ public sealed class Xbox360Output : IControllerOutput
         // updates several fields, so that default behavior causes many kernel/bus updates
         // for one Android packet. Batch all field changes and submit exactly once.
         _controller.AutoSubmitReport = false;
+        _controller.FeedbackReceived += OnFeedbackReceived;
         _controller.Connect();
         IsConnected = true;
         Status = "Xbox 360 virtual controller connected";
@@ -37,6 +38,14 @@ public sealed class Xbox360Output : IControllerOutput
 
     public bool IsConnected { get; private set; }
     public string Status { get; private set; }
+
+    public event Action<byte, byte>? GameFeedbackReceived;
+
+    private void OnFeedbackReceived(object sender, Xbox360FeedbackReceivedEventArgs e)
+    {
+        if (_disposed) return;
+        GameFeedbackReceived?.Invoke(e.LargeMotor, e.SmallMotor);
+    }
 
     public void Apply(ControllerState state)
     {
@@ -171,6 +180,7 @@ public sealed class Xbox360Output : IControllerOutput
 
         try
         {
+            _controller.FeedbackReceived -= OnFeedbackReceived;
             if (IsConnected)
             {
                 _controller.Disconnect();
