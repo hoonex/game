@@ -7,7 +7,7 @@ using PCWheelReceiver.Protocol;
 
 namespace PCWheelReceiver.Output;
 
-public sealed class Xbox360Output : IControllerOutput
+public sealed class Xbox360Output : IControllerOutput, IGameFeedbackSource
 {
     private readonly OutputConfig _config;
     private readonly ViGEmClient _client;
@@ -24,12 +24,8 @@ public sealed class Xbox360Output : IControllerOutput
         _config = config;
         _client = new ViGEmClient();
         _controller = _client.CreateXbox360Controller();
-
-        // ViGEm.NET normally submits the full XUSB report after every individual
-        // SetButtonState/SetAxisValue/SetSliderValue call. A single controller packet
-        // updates several fields, so that default behavior causes many kernel/bus updates
-        // for one Android packet. Batch all field changes and submit exactly once.
         _controller.AutoSubmitReport = false;
+        _controller.FeedbackReceived += OnFeedbackReceived;
         _controller.Connect();
         IsConnected = true;
         Status = "Xbox 360 virtual controller connected";
@@ -37,6 +33,13 @@ public sealed class Xbox360Output : IControllerOutput
 
     public bool IsConnected { get; private set; }
     public string Status { get; private set; }
+    public event Action<byte, byte>? GameFeedbackReceived;
+
+    private void OnFeedbackReceived(object sender, Xbox360FeedbackReceivedEventArgs e)
+    {
+        if (_disposed) return;
+        GameFeedbackReceived?.Invoke(e.LargeMotor, e.SmallMotor);
+    }
 
     public void Apply(ControllerState state)
     {
@@ -68,8 +71,6 @@ public sealed class Xbox360Output : IControllerOutput
             }
         }
 
-        // One atomic virtual-controller update per Android packet. Buttons remain immediate
-        // even when an analog output-rate cap is configured.
         _controller.SubmitReport();
     }
 
@@ -94,7 +95,6 @@ public sealed class Xbox360Output : IControllerOutput
         }
 
         value = ApplySteeringPrediction(value);
-
         var smoothing = Math.Clamp(_config.SteeringSmoothing, 0f, 0.95f);
         _smoothedSteering = (_smoothedSteering * smoothing) + (value * (1f - smoothing));
         return Math.Clamp(_smoothedSteering, -1f, 1f);
@@ -104,7 +104,6 @@ public sealed class Xbox360Output : IControllerOutput
     {
         var now = _outputClock.ElapsedTicks;
         var lookAheadMs = Math.Clamp(_config.SteeringPredictionMs, 0f, 60f);
-
         if (_lastPredictionTicks == 0)
         {
             _lastPredictionTicks = now;
@@ -116,24 +115,13 @@ public sealed class Xbox360Output : IControllerOutput
         var previous = _lastPredictionSample;
         _lastPredictionTicks = now;
         _lastPredictionSample = value;
-
-        if (lookAheadMs <= 0f || dt <= 0f || dt > 0.100f)
-        {
-            return value;
-        }
-
-        // Do not predict through the center or across a direction reversal; those are
-        // the cases where lead compensation is most likely to cause visible overshoot.
-        if (value == 0f || value * previous < 0f)
-        {
-            return value;
-        }
+        if (lookAheadMs <= 0f || dt <= 0f || dt > 0.100f) return value;
+        if (value == 0f || value * previous < 0f) return value;
 
         var velocity = Math.Clamp((value - previous) / dt, -12f, 12f);
         var predictedDelta = velocity * (lookAheadMs / 1000f);
         var maxBoost = Math.Clamp(_config.SteeringPredictionMaxBoost, 0f, 0.30f);
         predictedDelta = Math.Clamp(predictedDelta, -maxBoost, maxBoost);
-
         return Math.Clamp(value + predictedDelta, -1f, 1f);
     }
 
@@ -149,11 +137,9 @@ public sealed class Xbox360Output : IControllerOutput
     {
         var cap = Math.Clamp(_config.OutputRateCapHz, 0, 500);
         if (cap <= 0) return true;
-
         var now = _outputClock.ElapsedTicks;
         var minimumTicks = Math.Max(1L, Stopwatch.Frequency / cap);
         if (now - _lastAnalogOutputTicks < minimumTicks) return false;
-
         _lastAnalogOutputTicks = now;
         return true;
     }
@@ -168,13 +154,10 @@ public sealed class Xbox360Output : IControllerOutput
     {
         if (_disposed) return;
         _disposed = true;
-
         try
         {
-            if (IsConnected)
-            {
-                _controller.Disconnect();
-            }
+            _controller.FeedbackReceived -= OnFeedbackReceived;
+            if (IsConnected) _controller.Disconnect();
         }
         finally
         {
